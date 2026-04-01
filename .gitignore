@@ -1,3 +1,4 @@
 *.log
 config/node.json
 dashboard/venv/
+daemon/vernex-node
