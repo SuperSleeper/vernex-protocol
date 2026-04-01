@@ -8,8 +8,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/godbus/dbus/v5"
 )
 
 type NodeStats struct {
@@ -81,9 +85,53 @@ func (n *Node) printBanner() {
 		s.PersonalPartition, s.SocialPartition)
 }
 
+// takeInhibitorLock takes a systemd-logind sleep/idle inhibitor lock.
+// The returned file keeps the lock active until closed.
+func takeInhibitorLock() (*os.File, error) {
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return nil, fmt.Errorf("D-Bus connect: %w", err)
+	}
+	defer conn.Close()
+
+	obj := conn.Object("org.freedesktop.login1", "/org/freedesktop/login1")
+	var fd dbus.UnixFD
+	err = obj.Call("org.freedesktop.login1.Manager.Inhibit", 0,
+		"sleep:idle",
+		"Vernex Node",
+		"Contributing compute to the Vernex Protocol",
+		"block",
+	).Store(&fd)
+	if err != nil {
+		return nil, fmt.Errorf("Inhibit call: %w", err)
+	}
+	return os.NewFile(uintptr(fd), "inhibitor"), nil
+}
+
 func main() {
 	node := NewNode()
 	node.printBanner()
+
+	// Take sleep/idle inhibitor lock via systemd-logind
+	inhibitor, err := takeInhibitorLock()
+	if err != nil {
+		fmt.Printf("  [!] Sleep inhibitor unavailable: %v\n", err)
+	} else {
+		defer inhibitor.Close()
+		fmt.Println("  [✓] Sleep inhibitor active (node will not sleep)")
+	}
+
+	// Handle SIGINT/SIGTERM for clean shutdown (releases inhibitor via defer)
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigs
+		fmt.Printf("\n  [→] Received %s — shutting down...\n", sig)
+		if inhibitor != nil {
+			inhibitor.Close()
+		}
+		os.Exit(0)
+	}()
 
 	// Start contribution score ticker
 	go func() {
