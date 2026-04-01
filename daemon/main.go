@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"container/heap"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -79,12 +81,144 @@ type NodeStats struct {
 	ContributionScore float64   `json:"contribution_score"`
 	SocialPartition   int       `json:"social_partition_pct"`
 	PersonalPartition int       `json:"personal_partition_pct"`
+	QueueDepth        int       `json:"queue_depth"`
+}
+
+// --- Token Priority Queue ---
+
+// TokenRequest is a work item submitted to the scheduler.
+// Class 1 = community benefit (higher priority, higher contribution delta).
+// Class 2 = personal benefit (lower priority, lower contribution delta).
+type TokenRequest struct {
+	Class          int           `json:"class"`
+	Prompt         string        `json:"prompt"`
+	Justification  string        `json:"justification,omitempty"`   // required for Class 2 in Phase 4b
+	EstimatedCost  float64       `json:"estimated_cost,omitempty"`  // reserved for Phase 4b
+	RuntimeCeiling time.Duration `json:"runtime_ceiling,omitempty"` // reserved for graceful degradation
+	seq        int64             // internal FIFO ordering within same class
+	responseCh chan tokenResult   // result channel; nil for fire-and-forget
+}
+
+type tokenResult struct {
+	response          string
+	responseTimeMs    int64
+	contributionDelta float64
+	err               error
+}
+
+// requestQueue implements heap.Interface. Lower class = higher priority.
+// Within the same class, lower seq = earlier (FIFO).
+type requestQueue []*TokenRequest
+
+func (q requestQueue) Len() int { return len(q) }
+func (q requestQueue) Less(i, j int) bool {
+	if q[i].Class != q[j].Class {
+		return q[i].Class < q[j].Class
+	}
+	return q[i].seq < q[j].seq
+}
+func (q requestQueue) Swap(i, j int)       { q[i], q[j] = q[j], q[i] }
+func (q *requestQueue) Push(x any)         { *q = append(*q, x.(*TokenRequest)) }
+func (q *requestQueue) Pop() any {
+	old := *q
+	n := len(old)
+	item := old[n-1]
+	*q = old[:n-1]
+	return item
+}
+
+// Scheduler serialises requests through a priority queue.
+// Class 1 runs before Class 2; within each class requests are FIFO.
+type Scheduler struct {
+	queue   requestQueue
+	mu      sync.Mutex
+	cond    *sync.Cond
+	seqNext int64 // atomic counter for FIFO ordering
+}
+
+func NewScheduler() *Scheduler {
+	s := &Scheduler{}
+	s.cond = sync.NewCond(&s.mu)
+	heap.Init(&s.queue)
+	return s
+}
+
+func (s *Scheduler) Enqueue(req *TokenRequest) {
+	s.mu.Lock()
+	req.seq = atomic.AddInt64(&s.seqNext, 1)
+	heap.Push(&s.queue, req)
+	s.cond.Signal()
+	s.mu.Unlock()
+}
+
+func (s *Scheduler) depth() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.queue.Len()
+}
+
+// classCounts returns [class1count, class2count] without holding the lock long.
+func (s *Scheduler) classCounts() (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var c1, c2 int
+	for _, r := range s.queue {
+		if r.Class == 1 {
+			c1++
+		} else {
+			c2++
+		}
+	}
+	return c1, c2
+}
+
+// run is the single worker goroutine. It processes one request at a time,
+// Class 1 before Class 2, FIFO within each class.
+func (s *Scheduler) run(node *Node) {
+	for {
+		s.mu.Lock()
+		for s.queue.Len() == 0 {
+			s.cond.Wait()
+		}
+		req := heap.Pop(&s.queue).(*TokenRequest)
+		s.mu.Unlock()
+
+		delta := 2.0
+		if req.Class == 2 {
+			delta = 1.0
+		}
+
+		start := time.Now()
+		llmResp, err := callOllama(req.Prompt)
+		elapsed := time.Since(start).Milliseconds()
+
+		if err == nil {
+			node.mu.Lock()
+			node.stats.ContributionScore += delta
+			node.stats.TotalConnections++
+			node.mu.Unlock()
+			fmt.Printf("  [✓] scheduler class=%d  %dms  score=%.1f\n",
+				req.Class, elapsed, node.stats.ContributionScore)
+		} else {
+			fmt.Printf("  [!] scheduler class=%d error: %v\n", req.Class, err)
+		}
+
+		if req.responseCh != nil {
+			req.responseCh <- tokenResult{
+				response:          llmResp,
+				responseTimeMs:    elapsed,
+				contributionDelta: delta,
+				err:               err,
+			}
+		}
+	}
 }
 
 type Node struct {
-	cfg   NodeConfig
-	stats NodeStats
-	mu    sync.RWMutex
+	cfg       NodeConfig
+	stats     NodeStats
+	mu        sync.RWMutex
+	scheduler *Scheduler
 }
 
 type SubmitRequest struct {
@@ -145,14 +279,15 @@ func generateNodeID() string {
 func NewNode(cfg NodeConfig) *Node {
 	hostname, _ := os.Hostname()
 	return &Node{
-		cfg: cfg,
+		cfg:       cfg,
+		scheduler: NewScheduler(),
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.2.0",
+			Version:           "0.3.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -171,6 +306,7 @@ func (n *Node) getStats() NodeStats {
 	defer n.mu.RUnlock()
 	s := n.stats
 	s.UptimeSeconds = int64(time.Since(s.StartedAt).Seconds())
+	s.QueueDepth = n.scheduler.depth()
 	return s
 }
 
@@ -178,7 +314,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.2.0  — Patent Pending       ║")
+	fmt.Println("║       v0.3.0  — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Hostname  : %s\n", s.Hostname)
@@ -238,6 +374,10 @@ func main() {
 		os.Exit(0)
 	}()
 
+	// Start token scheduler worker
+	go node.scheduler.run(node)
+	fmt.Println("  [✓] Token scheduler running (Class 1 > Class 2, FIFO)")
+
 	// Start contribution score ticker
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -264,55 +404,61 @@ func main() {
 				http.Error(w, "POST required", http.StatusMethodNotAllowed)
 				return
 			}
-			var req SubmitRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			var incoming struct {
+				Class         int     `json:"class"`
+				Prompt        string  `json:"prompt"`
+				Justification string  `json:"justification"`
+				EstimatedCost float64 `json:"estimated_cost"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 				http.Error(w, "invalid JSON", http.StatusBadRequest)
 				return
 			}
-			if req.Class != 1 && req.Class != 2 {
+			if incoming.Class != 1 && incoming.Class != 2 {
 				http.Error(w, "class must be 1 or 2", http.StatusBadRequest)
 				return
 			}
-			if req.Prompt == "" {
+			if incoming.Prompt == "" {
 				http.Error(w, "prompt required", http.StatusBadRequest)
 				return
 			}
 
-			// Class 1 (community) earns more contribution than Class 2 (personal)
-			delta := 2.0
-			if req.Class == 2 {
-				delta = 1.0
-			}
+			respCh := make(chan tokenResult, 1)
+			node.scheduler.Enqueue(&TokenRequest{
+				Class:         incoming.Class,
+				Prompt:        incoming.Prompt,
+				Justification: incoming.Justification,
+				EstimatedCost: incoming.EstimatedCost,
+				responseCh:    respCh,
+			})
 
-			start := time.Now()
-			llmResponse, err := callOllama(req.Prompt)
-			elapsed := time.Since(start).Milliseconds()
-
-			if err != nil {
-				http.Error(w, fmt.Sprintf("LLM error: %v", err), http.StatusServiceUnavailable)
-				fmt.Printf("  [!] /submit error: %v\n", err)
+			result := <-respCh
+			if result.err != nil {
+				http.Error(w, fmt.Sprintf("LLM error: %v", result.err), http.StatusServiceUnavailable)
 				return
 			}
 
-			node.mu.Lock()
-			node.stats.ContributionScore += delta
-			node.stats.TotalConnections++
-			score := node.stats.ContributionScore
-			node.mu.Unlock()
-
 			s := node.getStats()
-			fmt.Printf("  [✓] /submit class=%d  %dms  score=%.1f\n", req.Class, elapsed, score)
-
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(SubmitResponse{
 				NodeID:            s.NodeID,
 				Hostname:          s.Hostname,
-				Class:             req.Class,
+				Class:             incoming.Class,
 				Model:             ollamaModel,
-				Response:          llmResponse,
-				ResponseTimeMs:    elapsed,
-				ContributionDelta: delta,
-				ContributionScore: score,
+				Response:          result.response,
+				ResponseTimeMs:    result.responseTimeMs,
+				ContributionDelta: result.contributionDelta,
+				ContributionScore: s.ContributionScore,
+			})
+		})
+
+		http.HandleFunc("/queue", func(w http.ResponseWriter, r *http.Request) {
+			c1, c2 := node.scheduler.classCounts()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"depth":   c1 + c2,
+				"class_1": c1,
+				"class_2": c2,
 			})
 		})
 		fmt.Printf("  [✓] Dashboard API listening on port %d\n", node.cfg.APIPort)
