@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -214,11 +215,65 @@ func (s *Scheduler) run(node *Node) {
 	}
 }
 
+// --- Commons Review ---
+// Patent-critical mechanism: the system may SUGGEST upgrading a Class 2 request
+// to Class 1, but CANNOT reclassify without explicit user consent.
+// The consent requirement is legally significant — do not remove or bypass it.
+
+const commonsReviewTTL = 60 * time.Second
+
+type pendingReview struct {
+	req       TokenRequest
+	reason    string // why the system suggested upgrade
+	expiresAt time.Time
+}
+
+type commonsAssessment struct {
+	CommunityBenefit bool   `json:"community_benefit"`
+	Reason           string `json:"reason"`
+}
+
+func generateReviewID() string {
+	b := make([]byte, 6)
+	rand.Read(b)
+	return "RVW-" + hex.EncodeToString(b)
+}
+
+// assessCommunityBenefit asks Mistral whether a prompt has broad community value.
+// Returns (shouldReview, reason, error).
+func assessCommunityBenefit(prompt string) (bool, string, error) {
+	assessment := `You are evaluating whether a user request has broad community or educational value that would benefit many people, not just the individual requester. Consider: Is this information publicly useful? Would multiple users benefit from knowing this?
+
+Request: "` + prompt + `"
+
+Respond only with valid JSON and no other text: {"community_benefit": true or false, "reason": "one sentence explanation"}`
+
+	raw, err := callOllama(assessment)
+	if err != nil {
+		return false, "", err
+	}
+
+	// Extract JSON from response (Mistral may include prose before/after)
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start == -1 || end == -1 || end <= start {
+		return false, "", fmt.Errorf("no JSON in assessment response")
+	}
+
+	var a commonsAssessment
+	if err := json.Unmarshal([]byte(raw[start:end+1]), &a); err != nil {
+		return false, "", fmt.Errorf("parse assessment: %w", err)
+	}
+	return a.CommunityBenefit, a.Reason, nil
+}
+
 type Node struct {
 	cfg       NodeConfig
 	stats     NodeStats
 	mu        sync.RWMutex
 	scheduler *Scheduler
+	reviews   map[string]pendingReview
+	reviewsMu sync.Mutex
 }
 
 type SubmitRequest struct {
@@ -281,13 +336,14 @@ func NewNode(cfg NodeConfig) *Node {
 	return &Node{
 		cfg:       cfg,
 		scheduler: NewScheduler(),
+		reviews:   make(map[string]pendingReview),
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.3.0",
+			Version:           "0.4.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -314,7 +370,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.3.0  — Patent Pending       ║")
+	fmt.Println("║       v0.4.0  — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Hostname  : %s\n", s.Hostname)
@@ -378,6 +434,29 @@ func main() {
 	go node.scheduler.run(node)
 	fmt.Println("  [✓] Token scheduler running (Class 1 > Class 2, FIFO)")
 
+	// Expire stale Commons Review entries
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		for range ticker.C {
+			now := time.Now()
+			node.reviewsMu.Lock()
+			for id, rev := range node.reviews {
+				if now.After(rev.expiresAt) {
+					fmt.Printf("  [~] commons review expired  id=%s — auto-running as Class 2\n", id)
+					respCh := make(chan tokenResult, 1)
+					node.scheduler.Enqueue(&TokenRequest{
+						Class:      rev.req.Class,
+						Prompt:     rev.req.Prompt,
+						responseCh: respCh,
+					})
+					delete(node.reviews, id)
+					go func() { <-respCh }() // drain result; no client waiting
+				}
+			}
+			node.reviewsMu.Unlock()
+		}
+	}()
+
 	// Start contribution score ticker
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -423,6 +502,44 @@ func main() {
 				return
 			}
 
+			// Commons Review: Class 2 requests are assessed for community benefit.
+			// If benefit is detected the system SUGGESTS an upgrade to Class 1.
+			// The request is held pending explicit user consent — it is NEVER
+			// reclassified automatically. This is the core patented constraint.
+			if incoming.Class == 2 {
+				benefit, reason, err := assessCommunityBenefit(incoming.Prompt)
+				if err != nil {
+					fmt.Printf("  [!] commons assessment error: %v — proceeding as Class 2\n", err)
+				} else if benefit {
+					reviewID := generateReviewID()
+					node.reviewsMu.Lock()
+					node.reviews[reviewID] = pendingReview{
+						req: TokenRequest{
+							Class:         2,
+							Prompt:        incoming.Prompt,
+							Justification: incoming.Justification,
+							EstimatedCost: incoming.EstimatedCost,
+						},
+						reason:    reason,
+						expiresAt: time.Now().Add(commonsReviewTTL),
+					}
+					node.reviewsMu.Unlock()
+
+					fmt.Printf("  [↑] commons review triggered  id=%s  reason=%q\n", reviewID, reason)
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]any{
+						"status":          "commons_review",
+						"review_id":       reviewID,
+						"original_class":  2,
+						"suggestion":      reason,
+						"message":         "This request may qualify as Class 1 (community benefit). Upgrading increases priority and contribution delta. POST to /consent with review_id and upgrade=true to accept, upgrade=false to proceed as Class 2.",
+						"expires_in_sec":  int(commonsReviewTTL.Seconds()),
+					})
+					return
+				}
+			}
+
+			// No commons review — enqueue directly at submitted class.
 			respCh := make(chan tokenResult, 1)
 			node.scheduler.Enqueue(&TokenRequest{
 				Class:         incoming.Class,
@@ -444,6 +561,85 @@ func main() {
 				NodeID:            s.NodeID,
 				Hostname:          s.Hostname,
 				Class:             incoming.Class,
+				Model:             ollamaModel,
+				Response:          result.response,
+				ResponseTimeMs:    result.responseTimeMs,
+				ContributionDelta: result.contributionDelta,
+				ContributionScore: s.ContributionScore,
+			})
+		})
+
+		// /consent — explicit user consent for Commons Review upgrade.
+		// upgrade=true  → execute as Class 1 (community)
+		// upgrade=false → execute as Class 2 (personal, original class)
+		// The system NEVER upgrades without this explicit consent call.
+		http.HandleFunc("/consent", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "POST required", http.StatusMethodNotAllowed)
+				return
+			}
+			var req struct {
+				ReviewID string `json:"review_id"`
+				Upgrade  *bool  `json:"upgrade"` // pointer — must be explicitly provided
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			if req.ReviewID == "" {
+				http.Error(w, "review_id required", http.StatusBadRequest)
+				return
+			}
+			if req.Upgrade == nil {
+				http.Error(w, "upgrade (true/false) required — explicit consent is mandatory", http.StatusBadRequest)
+				return
+			}
+
+			node.reviewsMu.Lock()
+			review, ok := node.reviews[req.ReviewID]
+			if ok {
+				delete(node.reviews, req.ReviewID)
+			}
+			node.reviewsMu.Unlock()
+
+			if !ok {
+				http.Error(w, "review_id not found or expired", http.StatusNotFound)
+				return
+			}
+			if time.Now().After(review.expiresAt) {
+				http.Error(w, "review expired — resubmit request", http.StatusGone)
+				return
+			}
+
+			finalClass := review.req.Class // default: keep as Class 2
+			if *req.Upgrade {
+				finalClass = 1 // user consented to Class 1 upgrade
+				fmt.Printf("  [✓] consent: upgraded to Class 1  id=%s\n", req.ReviewID)
+			} else {
+				fmt.Printf("  [→] consent: kept as Class 2  id=%s\n", req.ReviewID)
+			}
+
+			respCh := make(chan tokenResult, 1)
+			node.scheduler.Enqueue(&TokenRequest{
+				Class:         finalClass,
+				Prompt:        review.req.Prompt,
+				Justification: review.req.Justification,
+				EstimatedCost: review.req.EstimatedCost,
+				responseCh:    respCh,
+			})
+
+			result := <-respCh
+			if result.err != nil {
+				http.Error(w, fmt.Sprintf("LLM error: %v", result.err), http.StatusServiceUnavailable)
+				return
+			}
+
+			s := node.getStats()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(SubmitResponse{
+				NodeID:            s.NodeID,
+				Hostname:          s.Hostname,
+				Class:             finalClass,
 				Model:             ollamaModel,
 				Response:          result.response,
 				ResponseTimeMs:    result.responseTimeMs,
