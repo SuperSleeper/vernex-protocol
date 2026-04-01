@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -83,6 +85,55 @@ type Node struct {
 	cfg   NodeConfig
 	stats NodeStats
 	mu    sync.RWMutex
+}
+
+type SubmitRequest struct {
+	Prompt string `json:"prompt"`
+	Class  int    `json:"class"`
+}
+
+type SubmitResponse struct {
+	NodeID            string  `json:"node_id"`
+	Hostname          string  `json:"hostname"`
+	Class             int     `json:"class"`
+	Model             string  `json:"model"`
+	Response          string  `json:"response"`
+	ResponseTimeMs    int64   `json:"response_time_ms"`
+	ContributionDelta float64 `json:"contribution_delta"`
+	ContributionScore float64 `json:"contribution_score"`
+}
+
+type ollamaRequest struct {
+	Model  string `json:"model"`
+	Prompt string `json:"prompt"`
+	Stream bool   `json:"stream"`
+}
+
+type ollamaResponse struct {
+	Model    string `json:"model"`
+	Response string `json:"response"`
+	Done     bool   `json:"done"`
+}
+
+const ollamaURL = "http://localhost:11434/api/generate"
+const ollamaModel = "mistral"
+
+func callOllama(prompt string) (string, error) {
+	body, _ := json.Marshal(ollamaRequest{Model: ollamaModel, Prompt: prompt, Stream: false})
+	resp, err := http.Post(ollamaURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("ollama unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading ollama response: %w", err)
+	}
+	var ollamaResp ollamaResponse
+	if err := json.Unmarshal(raw, &ollamaResp); err != nil {
+		return "", fmt.Errorf("parsing ollama response: %w", err)
+	}
+	return ollamaResp.Response, nil
 }
 
 func generateNodeID() string {
@@ -207,6 +258,62 @@ func main() {
 		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprintln(w, "ok")
+		})
+		http.HandleFunc("/submit", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "POST required", http.StatusMethodNotAllowed)
+				return
+			}
+			var req SubmitRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			if req.Class != 1 && req.Class != 2 {
+				http.Error(w, "class must be 1 or 2", http.StatusBadRequest)
+				return
+			}
+			if req.Prompt == "" {
+				http.Error(w, "prompt required", http.StatusBadRequest)
+				return
+			}
+
+			// Class 1 (community) earns more contribution than Class 2 (personal)
+			delta := 2.0
+			if req.Class == 2 {
+				delta = 1.0
+			}
+
+			start := time.Now()
+			llmResponse, err := callOllama(req.Prompt)
+			elapsed := time.Since(start).Milliseconds()
+
+			if err != nil {
+				http.Error(w, fmt.Sprintf("LLM error: %v", err), http.StatusServiceUnavailable)
+				fmt.Printf("  [!] /submit error: %v\n", err)
+				return
+			}
+
+			node.mu.Lock()
+			node.stats.ContributionScore += delta
+			node.stats.TotalConnections++
+			score := node.stats.ContributionScore
+			node.mu.Unlock()
+
+			s := node.getStats()
+			fmt.Printf("  [✓] /submit class=%d  %dms  score=%.1f\n", req.Class, elapsed, score)
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(SubmitResponse{
+				NodeID:            s.NodeID,
+				Hostname:          s.Hostname,
+				Class:             req.Class,
+				Model:             ollamaModel,
+				Response:          llmResponse,
+				ResponseTimeMs:    elapsed,
+				ContributionDelta: delta,
+				ContributionScore: score,
+			})
 		})
 		fmt.Printf("  [✓] Dashboard API listening on port %d\n", node.cfg.APIPort)
 		http.ListenAndServe(fmt.Sprintf(":%d", node.cfg.APIPort), nil)
