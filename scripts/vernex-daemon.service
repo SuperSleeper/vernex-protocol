@@ -1,0 +1,17 @@
+[Unit]
+Description=Vernex Protocol Node Daemon
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ericgeer
+WorkingDirectory=/home/ericgeer/vernex/daemon
+ExecStart=/home/ericgeer/vernex/daemon/vernex-node
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

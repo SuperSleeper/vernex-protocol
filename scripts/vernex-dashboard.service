@@ -1,0 +1,17 @@
+[Unit]
+Description=Vernex Protocol Dashboard
+After=network.target vernex-daemon.service
+Wants=vernex-daemon.service
+
+[Service]
+Type=simple
+User=ericgeer
+WorkingDirectory=/home/ericgeer/vernex/dashboard
+ExecStart=/home/ericgeer/vernex/dashboard/venv/bin/python3 app.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

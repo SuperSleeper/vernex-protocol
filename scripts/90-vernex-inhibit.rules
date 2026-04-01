@@ -1,0 +1,10 @@
+// Allow the vernex service user to take sleep/idle inhibitor locks
+// without requiring an active graphical logind session.
+// Required because systemd services run outside a user session scope.
+polkit.addRule(function(action, subject) {
+    if ((action.id === "org.freedesktop.login1.inhibit-block-sleep" ||
+         action.id === "org.freedesktop.login1.inhibit-block-idle") &&
+        subject.user === "ericgeer") {
+        return polkit.Result.YES;
+    }
+});
