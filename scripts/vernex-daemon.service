@@ -6,8 +6,9 @@ Wants=network.target
 [Service]
 Type=simple
 User=ericgeer
+PAMName=login
 WorkingDirectory=/home/ericgeer/vernex/daemon
-ExecStart=systemd-inhibit --what=sleep:idle --who="Vernex Node" --why="Contributing compute to Vernex network" --mode=block /home/ericgeer/vernex/daemon/vernex-node
+ExecStart=/home/ericgeer/vernex/daemon/vernex-node
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
