@@ -1,2 +1,3 @@
 *.log
 config/node.json
+dashboard/venv/
