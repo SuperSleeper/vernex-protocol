@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -16,20 +17,70 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
+type NodeConfig struct {
+	NodeID               string `json:"node_id"`
+	SocialPartitionPct   int    `json:"social_partition_pct"`
+	PersonalPartitionPct int    `json:"personal_partition_pct"`
+	DaemonPort           int    `json:"daemon_port"`
+	APIPort              int    `json:"api_port"`
+	DashboardPort        int    `json:"dashboard_port"`
+}
+
+func loadConfig() NodeConfig {
+	cfg := NodeConfig{
+		SocialPartitionPct:   30,
+		PersonalPartitionPct: 70,
+		DaemonPort:           7700,
+		APIPort:              7701,
+		DashboardPort:        5000,
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Println("  [!] Could not determine home dir — using defaults")
+		return cfg
+	}
+	path := filepath.Join(home, "vernex", "config", "node.json")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Printf("  [!] Config not found at %s — using defaults\n", path)
+		return cfg
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		fmt.Printf("  [!] Config parse error: %v — using defaults\n", err)
+		return cfg
+	}
+
+	// Persist a generated node_id back to config so ID survives restarts
+	if cfg.NodeID == "" {
+		cfg.NodeID = generateNodeID()
+		if out, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+			os.WriteFile(path, append(out, '\n'), 0644)
+		}
+		fmt.Printf("  [✓] Generated and saved Node ID: %s\n", cfg.NodeID)
+	}
+
+	fmt.Printf("  [✓] Config loaded from %s\n", path)
+	return cfg
+}
+
 type NodeStats struct {
-	NodeID          string    `json:"node_id"`
-	Hostname        string    `json:"hostname"`
-	StartedAt       time.Time `json:"started_at"`
-	Port            int       `json:"port"`
-	Version         string    `json:"version"`
-	UptimeSeconds   int64     `json:"uptime_seconds"`
-	TotalConnections int      `json:"total_connections"`
-	ContributionScore float64 `json:"contribution_score"`
-	SocialPartition  int      `json:"social_partition_pct"`
-	PersonalPartition int     `json:"personal_partition_pct"`
+	NodeID            string    `json:"node_id"`
+	Hostname          string    `json:"hostname"`
+	StartedAt         time.Time `json:"started_at"`
+	Port              int       `json:"port"`
+	APIPort           int       `json:"api_port"`
+	Version           string    `json:"version"`
+	UptimeSeconds     int64     `json:"uptime_seconds"`
+	TotalConnections  int       `json:"total_connections"`
+	ContributionScore float64   `json:"contribution_score"`
+	SocialPartition   int       `json:"social_partition_pct"`
+	PersonalPartition int       `json:"personal_partition_pct"`
 }
 
 type Node struct {
+	cfg   NodeConfig
 	stats NodeStats
 	mu    sync.RWMutex
 }
@@ -40,17 +91,19 @@ func generateNodeID() string {
 	return "VRX-" + hex.EncodeToString(bytes)
 }
 
-func NewNode() *Node {
+func NewNode(cfg NodeConfig) *Node {
 	hostname, _ := os.Hostname()
 	return &Node{
+		cfg: cfg,
 		stats: NodeStats{
-			NodeID:            generateNodeID(),
+			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
 			StartedAt:         time.Now(),
-			Port:              7700,
+			Port:              cfg.DaemonPort,
+			APIPort:           cfg.APIPort,
 			Version:           "0.2.0",
-			SocialPartition:   30,
-			PersonalPartition: 70,
+			SocialPartition:   cfg.SocialPartitionPct,
+			PersonalPartition: cfg.PersonalPartitionPct,
 		},
 	}
 }
@@ -79,7 +132,7 @@ func (n *Node) printBanner() {
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Hostname  : %s\n", s.Hostname)
 	fmt.Printf("  Port      : %d  (P2P)\n", s.Port)
-	fmt.Printf("  HTTP      : 7701 (dashboard API)\n")
+	fmt.Printf("  HTTP      : %d (dashboard API)\n", s.APIPort)
 	fmt.Printf("  Started   : %s\n", s.StartedAt.Format("2006-01-02 15:04:05"))
 	fmt.Printf("  Partition : %d%% personal / %d%% social\n\n",
 		s.PersonalPartition, s.SocialPartition)
@@ -109,7 +162,8 @@ func takeInhibitorLock() (*os.File, error) {
 }
 
 func main() {
-	node := NewNode()
+	cfg := loadConfig()
+	node := NewNode(cfg)
 	node.printBanner()
 
 	// Take sleep/idle inhibitor lock via systemd-logind
@@ -154,19 +208,19 @@ func main() {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprintln(w, "ok")
 		})
-		fmt.Println("  [✓] Dashboard API listening on port 7701")
-		http.ListenAndServe(":7701", nil)
+		fmt.Printf("  [✓] Dashboard API listening on port %d\n", node.cfg.APIPort)
+		http.ListenAndServe(fmt.Sprintf(":%d", node.cfg.APIPort), nil)
 	}()
 
-	// Start P2P listener on port 7700
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", 7700))
+	// Start P2P listener
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", node.cfg.DaemonPort))
 	if err != nil {
-		fmt.Printf("  ERROR: Could not bind to port 7700 — %v\n", err)
+		fmt.Printf("  ERROR: Could not bind to port %d — %v\n", node.cfg.DaemonPort, err)
 		os.Exit(1)
 	}
 	defer listener.Close()
 
-	fmt.Println("  [✓] P2P listener on port 7700")
+	fmt.Printf("  [✓] P2P listener on port %d\n", node.cfg.DaemonPort)
 	fmt.Println("  [✓] Node is online — waiting for connections...")
 	fmt.Println("  Press Ctrl+C to stop\n")
 
