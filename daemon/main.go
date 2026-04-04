@@ -13,8 +13,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -49,9 +49,18 @@ func loadConfig() NodeConfig {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Printf("  [!] Config not found at %s — using defaults\n", path)
+		// Config file doesn't exist — generate ID and write default config
+		cfg.NodeID = generateNodeID()
+		if out, merr := json.MarshalIndent(cfg, "", "  "); merr == nil {
+			os.MkdirAll(filepath.Dir(path), 0755)
+			os.WriteFile(path, append(out, '\n'), 0644)
+			fmt.Printf("  [✓] Generated Node ID and saved config to %s\n", path)
+		} else {
+			fmt.Printf("  [!] Config not found at %s — using defaults (ID not persisted)\n", path)
+		}
 		return cfg
 	}
+
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		fmt.Printf("  [!] Config parse error: %v — using defaults\n", err)
 		return cfg
@@ -60,7 +69,7 @@ func loadConfig() NodeConfig {
 	// Persist a generated node_id back to config so ID survives restarts
 	if cfg.NodeID == "" {
 		cfg.NodeID = generateNodeID()
-		if out, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+		if out, merr := json.MarshalIndent(cfg, "", "  "); merr == nil {
 			os.WriteFile(path, append(out, '\n'), 0644)
 		}
 		fmt.Printf("  [✓] Generated and saved Node ID: %s\n", cfg.NodeID)
@@ -93,15 +102,18 @@ type NodeStats struct {
 type TokenRequest struct {
 	Class          int           `json:"class"`
 	Prompt         string        `json:"prompt"`
+	Model          string        `json:"model,omitempty"`
 	Justification  string        `json:"justification,omitempty"`   // required for Class 2 in Phase 4b
 	EstimatedCost  float64       `json:"estimated_cost,omitempty"`  // reserved for Phase 4b
 	RuntimeCeiling time.Duration `json:"runtime_ceiling,omitempty"` // reserved for graceful degradation
-	seq        int64             // internal FIFO ordering within same class
-	responseCh chan tokenResult   // result channel; nil for fire-and-forget
+	seq            int64         // internal FIFO ordering within same class
+	responseCh     chan tokenResult // result channel; nil for fire-and-forget
 }
 
 type tokenResult struct {
 	response          string
+	routedTo          string
+	model             string
 	responseTimeMs    int64
 	contributionDelta float64
 	err               error
@@ -118,8 +130,8 @@ func (q requestQueue) Less(i, j int) bool {
 	}
 	return q[i].seq < q[j].seq
 }
-func (q requestQueue) Swap(i, j int)       { q[i], q[j] = q[j], q[i] }
-func (q *requestQueue) Push(x any)         { *q = append(*q, x.(*TokenRequest)) }
+func (q requestQueue) Swap(i, j int)  { q[i], q[j] = q[j], q[i] }
+func (q *requestQueue) Push(x any)    { *q = append(*q, x.(*TokenRequest)) }
 func (q *requestQueue) Pop() any {
 	old := *q
 	n := len(old)
@@ -189,8 +201,13 @@ func (s *Scheduler) run(node *Node) {
 			delta = 1.0
 		}
 
+		model := req.Model
+		if model == "" {
+			model = defaultModel
+		}
+
 		start := time.Now()
-		llmResp, err := callOllama(req.Prompt)
+		llmResp, routedTo, err := routedCallOllama(req.Prompt, model)
 		elapsed := time.Since(start).Milliseconds()
 
 		if err == nil {
@@ -198,8 +215,8 @@ func (s *Scheduler) run(node *Node) {
 			node.stats.ContributionScore += delta
 			node.stats.TotalConnections++
 			node.mu.Unlock()
-			fmt.Printf("  [✓] scheduler class=%d  %dms  score=%.1f\n",
-				req.Class, elapsed, node.stats.ContributionScore)
+			fmt.Printf("  [✓] scheduler class=%d  %dms  score=%.1f  routed=%s\n",
+				req.Class, elapsed, node.stats.ContributionScore, routedTo)
 		} else {
 			fmt.Printf("  [!] scheduler class=%d error: %v\n", req.Class, err)
 		}
@@ -207,6 +224,8 @@ func (s *Scheduler) run(node *Node) {
 		if req.responseCh != nil {
 			req.responseCh <- tokenResult{
 				response:          llmResp,
+				routedTo:          routedTo,
+				model:             model,
 				responseTimeMs:    elapsed,
 				contributionDelta: delta,
 				err:               err,
@@ -248,7 +267,7 @@ Request: "` + prompt + `"
 
 Respond only with valid JSON and no other text: {"community_benefit": true or false, "reason": "one sentence explanation"}`
 
-	raw, err := callOllama(assessment)
+	raw, _, err := routedCallOllama(assessment, defaultModel)
 	if err != nil {
 		return false, "", err
 	}
@@ -267,29 +286,60 @@ Respond only with valid JSON and no other text: {"community_benefit": true or fa
 	return a.CommunityBenefit, a.Reason, nil
 }
 
-type Node struct {
-	cfg       NodeConfig
-	stats     NodeStats
-	mu        sync.RWMutex
-	scheduler *Scheduler
-	reviews   map[string]pendingReview
-	reviewsMu sync.Mutex
+// --- Multi-node Ollama routing ---
+
+const defaultModel = "mistral"
+
+type ollamaNode struct {
+	name    string
+	baseURL string
 }
 
-type SubmitRequest struct {
-	Prompt string `json:"prompt"`
-	Class  int    `json:"class"`
+// ollamaNodes lists all Ollama endpoints in preference order.
+// selectBestNode picks the one with the lowest active model count.
+var ollamaNodes = []ollamaNode{
+	{name: "local", baseURL: "http://localhost:11434"},
+	{name: "node2", baseURL: "http://172.17.0.198:11434"},
 }
 
-type SubmitResponse struct {
-	NodeID            string  `json:"node_id"`
-	Hostname          string  `json:"hostname"`
-	Class             int     `json:"class"`
-	Model             string  `json:"model"`
-	Response          string  `json:"response"`
-	ResponseTimeMs    int64   `json:"response_time_ms"`
-	ContributionDelta float64 `json:"contribution_delta"`
-	ContributionScore float64 `json:"contribution_score"`
+type ollamaPsResponse struct {
+	Models []struct {
+		Name string `json:"name"`
+	} `json:"models"`
+}
+
+// checkOllamaLoad calls /api/ps and returns the number of active models.
+// A lower count means lighter load. Returns an error if the node is unreachable.
+func checkOllamaLoad(baseURL string) (int, error) {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(baseURL + "/api/ps")
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	var ps ollamaPsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ps); err != nil {
+		return 0, err
+	}
+	return len(ps.Models), nil
+}
+
+// selectBestNode returns the available Ollama node with the lowest load.
+// Falls back to the first node if none respond (generate call will surface the error).
+func selectBestNode() ollamaNode {
+	best := ollamaNodes[0]
+	bestLoad := -1
+	for _, n := range ollamaNodes {
+		load, err := checkOllamaLoad(n.baseURL)
+		if err != nil {
+			continue
+		}
+		if bestLoad == -1 || load < bestLoad {
+			bestLoad = load
+			best = n
+		}
+	}
+	return best
 }
 
 type ollamaRequest struct {
@@ -304,14 +354,13 @@ type ollamaResponse struct {
 	Done     bool   `json:"done"`
 }
 
-const ollamaURL = "http://localhost:11434/api/generate"
-const ollamaModel = "mistral"
-
-func callOllama(prompt string) (string, error) {
-	body, _ := json.Marshal(ollamaRequest{Model: ollamaModel, Prompt: prompt, Stream: false})
-	resp, err := http.Post(ollamaURL, "application/json", bytes.NewReader(body))
+// callOllamaAt sends a generate request to a specific Ollama endpoint.
+func callOllamaAt(baseURL, model, prompt string) (string, error) {
+	body, _ := json.Marshal(ollamaRequest{Model: model, Prompt: prompt, Stream: false})
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Post(baseURL+"/api/generate", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("ollama unreachable: %w", err)
+		return "", fmt.Errorf("ollama unreachable at %s: %w", baseURL, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
@@ -325,10 +374,61 @@ func callOllama(prompt string) (string, error) {
 	return ollamaResp.Response, nil
 }
 
+// routedCallOllama selects the best available node and calls it.
+// If the selected node fails, it tries remaining nodes before returning an error.
+// Returns (response, routed_to_name, error).
+func routedCallOllama(prompt, model string) (string, string, error) {
+	primary := selectBestNode()
+	response, err := callOllamaAt(primary.baseURL, model, prompt)
+	if err == nil {
+		return response, primary.name, nil
+	}
+	fmt.Printf("  [!] ollama routing: %s failed (%v) — trying fallback nodes\n", primary.name, err)
+
+	for _, n := range ollamaNodes {
+		if n.baseURL == primary.baseURL {
+			continue
+		}
+		response, ferr := callOllamaAt(n.baseURL, model, prompt)
+		if ferr == nil {
+			fmt.Printf("  [→] ollama routing: fell back to %s\n", n.name)
+			return response, n.name, nil
+		}
+	}
+	return "", "", fmt.Errorf("all ollama nodes unreachable (last error: %w)", err)
+}
+
 func generateNodeID() string {
-	bytes := make([]byte, 8)
-	rand.Read(bytes)
-	return "VRX-" + hex.EncodeToString(bytes)
+	b := make([]byte, 8)
+	rand.Read(b)
+	return "VRX-" + hex.EncodeToString(b)
+}
+
+type Node struct {
+	cfg       NodeConfig
+	stats     NodeStats
+	mu        sync.RWMutex
+	scheduler *Scheduler
+	reviews   map[string]pendingReview
+	reviewsMu sync.Mutex
+}
+
+type SubmitRequest struct {
+	Prompt string `json:"prompt"`
+	Class  int    `json:"class"`
+	Model  string `json:"model"`
+}
+
+type SubmitResponse struct {
+	NodeID            string  `json:"node_id"`
+	Hostname          string  `json:"hostname"`
+	Class             int     `json:"class"`
+	Model             string  `json:"model"`
+	RoutedTo          string  `json:"routed_to"`
+	Response          string  `json:"response"`
+	ResponseTimeMs    int64   `json:"response_time_ms"`
+	ContributionDelta float64 `json:"contribution_delta"`
+	ContributionScore float64 `json:"contribution_score"`
 }
 
 func NewNode(cfg NodeConfig) *Node {
@@ -343,7 +443,7 @@ func NewNode(cfg NodeConfig) *Node {
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.4.0",
+			Version:           "0.5.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -370,7 +470,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.4.0  — Patent Pending       ║")
+	fmt.Println("║       v0.5.0  — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Hostname  : %s\n", s.Hostname)
@@ -447,6 +547,7 @@ func main() {
 					node.scheduler.Enqueue(&TokenRequest{
 						Class:      rev.req.Class,
 						Prompt:     rev.req.Prompt,
+						Model:      rev.req.Model,
 						responseCh: respCh,
 					})
 					delete(node.reviews, id)
@@ -486,6 +587,7 @@ func main() {
 			var incoming struct {
 				Class         int     `json:"class"`
 				Prompt        string  `json:"prompt"`
+				Model         string  `json:"model"`
 				Justification string  `json:"justification"`
 				EstimatedCost float64 `json:"estimated_cost"`
 			}
@@ -500,6 +602,9 @@ func main() {
 			if incoming.Prompt == "" {
 				http.Error(w, "prompt required", http.StatusBadRequest)
 				return
+			}
+			if incoming.Model == "" {
+				incoming.Model = defaultModel
 			}
 
 			// Commons Review: Class 2 requests are assessed for community benefit.
@@ -517,6 +622,7 @@ func main() {
 						req: TokenRequest{
 							Class:         2,
 							Prompt:        incoming.Prompt,
+							Model:         incoming.Model,
 							Justification: incoming.Justification,
 							EstimatedCost: incoming.EstimatedCost,
 						},
@@ -528,12 +634,12 @@ func main() {
 					fmt.Printf("  [↑] commons review triggered  id=%s  reason=%q\n", reviewID, reason)
 					w.Header().Set("Content-Type", "application/json")
 					json.NewEncoder(w).Encode(map[string]any{
-						"status":          "commons_review",
-						"review_id":       reviewID,
-						"original_class":  2,
-						"suggestion":      reason,
-						"message":         "This request may qualify as Class 1 (community benefit). Upgrading increases priority and contribution delta. POST to /consent with review_id and upgrade=true to accept, upgrade=false to proceed as Class 2.",
-						"expires_in_sec":  int(commonsReviewTTL.Seconds()),
+						"status":         "commons_review",
+						"review_id":      reviewID,
+						"original_class": 2,
+						"suggestion":     reason,
+						"message":        "This request may qualify as Class 1 (community benefit). Upgrading increases priority and contribution delta. POST to /consent with review_id and upgrade=true to accept, upgrade=false to proceed as Class 2.",
+						"expires_in_sec": int(commonsReviewTTL.Seconds()),
 					})
 					return
 				}
@@ -544,6 +650,7 @@ func main() {
 			node.scheduler.Enqueue(&TokenRequest{
 				Class:         incoming.Class,
 				Prompt:        incoming.Prompt,
+				Model:         incoming.Model,
 				Justification: incoming.Justification,
 				EstimatedCost: incoming.EstimatedCost,
 				responseCh:    respCh,
@@ -561,7 +668,8 @@ func main() {
 				NodeID:            s.NodeID,
 				Hostname:          s.Hostname,
 				Class:             incoming.Class,
-				Model:             ollamaModel,
+				Model:             result.model,
+				RoutedTo:          result.routedTo,
 				Response:          result.response,
 				ResponseTimeMs:    result.responseTimeMs,
 				ContributionDelta: result.contributionDelta,
@@ -623,6 +731,7 @@ func main() {
 			node.scheduler.Enqueue(&TokenRequest{
 				Class:         finalClass,
 				Prompt:        review.req.Prompt,
+				Model:         review.req.Model,
 				Justification: review.req.Justification,
 				EstimatedCost: review.req.EstimatedCost,
 				responseCh:    respCh,
@@ -640,7 +749,8 @@ func main() {
 				NodeID:            s.NodeID,
 				Hostname:          s.Hostname,
 				Class:             finalClass,
-				Model:             ollamaModel,
+				Model:             result.model,
+				RoutedTo:          result.routedTo,
 				Response:          result.response,
 				ResponseTimeMs:    result.responseTimeMs,
 				ContributionDelta: result.contributionDelta,

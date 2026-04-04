@@ -13,10 +13,10 @@ A Python dashboard provides a real-time view of node status and token activity.
 
 ---
 
-## Current State (as of March 31, 2026)
+## Current State (as of April 4, 2026)
 
 ### Working
-- Go daemon v0.4.0 running on Node-1 (Node-2 pending pull/build)
+- Go daemon v0.5.0 running on Node-1 (Node-2 pending pull/build)
 - P2P TCP listener on port 7700
 - HTTP API on port 7701: `/status`, `/health`, `/submit`, `/consent`, `/queue`
 - Contribution score tracking (increments over time, per connection, and per LLM job)
@@ -25,10 +25,14 @@ A Python dashboard provides a real-time view of node status and token activity.
 - Private GitHub repo, SSH key auth on both nodes
 - Sleep/idle inhibitor via systemd-logind D-Bus (Node-1 ✓, Node-2 deferred)
 - Node config loaded from `~/vernex/config/node.json` at startup
-- Node ID persisted across restarts (written back to config on first run)
+- Node ID persisted across restarts — also written on first run if config file absent
 - Ports, partition percentages configurable per-node via config file
 - SIGINT/SIGTERM handled cleanly — inhibitor released on shutdown
-- Ollama/Mistral LLM running locally on Node-1 (RTX 3070, 4978MiB VRAM)
+- Ollama/Mistral LLM running on Node-1 (RTX 3070) AND Node-2 (172.17.0.198:11434)
+- Multi-node inference routing: `/submit` checks `/api/ps` on both Ollama nodes, routes to
+  lowest load; automatic fallback if primary node unreachable; `routed_to` in response
+- Optional `model` field in `/submit` JSON (defaults to `mistral`); both nodes have
+  `mistral:7b-instruct-q4_K_M` and `llama3.1:8b-instruct-q4_K_M`
 - Class 1/2 token priority queue — Class 1 runs before Class 2, FIFO within class
 - Priority ordering validated under concurrent load
 - Commons Review — Class 2 requests assessed by Mistral for community benefit;
@@ -36,7 +40,7 @@ A Python dashboard provides a real-time view of node status and token activity.
 
 ### Node Registry
 - **vernex-node1**: 172.17.0.132 — RTX 3070 / 64GB RAM — primary dev machine (Pop!_OS)
-- **vernex-node2**: 172.17.0.198 — HP Victus — second node (Pop!_OS)
+- **vernex-node2**: 172.17.0.198 — HP Victus — second node (Pop!_OS) — Ollama active on :11434
 
 ---
 
@@ -153,6 +157,17 @@ generates and persists `node_id` on first run.
 - Single scheduler worker goroutine; `queue_depth` exposed in `/status`
 - Priority ordering validated under concurrent load (3x Class 2 + 2x Class 1 simultaneous)
 
+### ✓ Multi-node Ollama routing (v0.5.0)
+- `selectBestNode()` checks `/api/ps` on all nodes (3s timeout); picks lowest active model count
+- `routedCallOllama(prompt, model)` routes to best node, falls back to others on failure
+- `routed_to` field in `/submit` and `/consent` responses shows which node handled inference
+- Optional `model` field in `/submit` JSON (defaults to `mistral`)
+- `assessCommunityBenefit` also routes through the same multi-node logic
+
+### ✓ node_id persistence fix (v0.5.0)
+- `loadConfig()` now creates `~/vernex/config/node.json` with defaults + generated ID
+  even when the file doesn't exist yet (previously only saved when file existed)
+
 ### ✓ Commons Review (patented mechanism)
 - Class 2 `/submit` triggers Mistral assessment of community benefit
 - If benefit detected: returns `status: commons_review` with `review_id` and suggestion
@@ -248,7 +263,8 @@ cd daemon && go build -o vernex-node .
 - Power save can take nodes offline — sleep inhibitor works when running interactively;
   deferred fix via systemd service PAMName=login or running as root
 - systemd service dashboard (203/EXEC) deferred — venv path issue in service context
-- Node-2 does not have Ollama — /submit only works on Node-1 currently
+- Node-2 Ollama accessible at 172.17.0.198:11434 — cross-node routing validated
+- Routing uses /api/ps load (active model count); if both nodes idle, local is preferred
 
 ---
 
@@ -267,6 +283,9 @@ cd daemon && go build -o vernex-node .
 | Mar 2026 | Inhibitor skips gracefully if unavailable | SSH-launched daemons lack logind session; resolved by systemd service (item 2) |
 | Mar 2026 | Mistral via Ollama for LLM backend | Runs 100% GPU on RTX 3070; no API key needed; fits in 8GB VRAM |
 | Mar 2026 | Commons Review uses Mistral for assessment | Same local model for both assessment and generation; no external dependency |
+| Apr 2026 | Multi-node routing via /api/ps load check | Picks lowest active-model count; 3s timeout on load check; fallback to other node on failure |
+| Apr 2026 | model field optional in /submit (default mistral) | Supports mistral:7b-instruct-q4_K_M and llama3.1:8b-instruct-q4_K_M on both nodes |
+| Apr 2026 | node_id persisted even when config file absent | Creates ~/vernex/config/node.json with defaults + generated ID on first run |
 | Mar 2026 | upgrade field is pointer (*bool) in consent | Prevents implicit consent — omitting upgrade returns 400; legally significant |
 | Mar 2026 | Pending reviews expire as Class 2, not dropped | User gets their answer even if they miss the consent window |
 
