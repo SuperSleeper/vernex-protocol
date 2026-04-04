@@ -367,6 +367,11 @@ func callOllamaAt(baseURL, model, prompt string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading ollama response: %w", err)
 	}
+	if resp.StatusCode != http.StatusOK {
+		// Treat any non-200 (e.g. 404 model not found, 500 internal) as a node failure
+		// so routedCallOllama can fall back to the next node.
+		return "", fmt.Errorf("ollama at %s returned HTTP %d: %s", baseURL, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
 	var ollamaResp ollamaResponse
 	if err := json.Unmarshal(raw, &ollamaResp); err != nil {
 		return "", fmt.Errorf("parsing ollama response: %w", err)
