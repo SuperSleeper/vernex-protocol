@@ -1,6 +1,7 @@
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, jsonify, request, send_from_directory
 import requests
 import json
+import os
 
 app = Flask(__name__)
 
@@ -156,6 +157,56 @@ def index():
         total_nodes=len(NODES),
         network_score=network_score,
     )
+
+@app.route("/ui")
+def ui():
+    return send_from_directory(os.path.dirname(__file__), "index.html")
+
+
+@app.route("/api/nodes")
+def api_nodes():
+    nodes = {}
+    for name, url in NODES.items():
+        try:
+            r = requests.get(f"{url}/status", timeout=2)
+            d = r.json()
+            nodes[name] = {
+                "online": True,
+                "node_id": d["node_id"],
+                "uptime": fmt_uptime(d["uptime_seconds"]),
+                "contribution_score": d["contribution_score"],
+                "version": d["version"],
+            }
+        except Exception:
+            nodes[name] = {"online": False}
+    return jsonify(nodes)
+
+
+@app.route("/api/submit", methods=["POST"])
+def api_submit():
+    try:
+        r = requests.post(
+            f"{NODES['vernex-node1']}/submit",
+            json=request.get_json(),
+            timeout=120,
+        )
+        return r.content, r.status_code, {"Content-Type": "application/json"}
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+
+@app.route("/api/consent", methods=["POST"])
+def api_consent():
+    try:
+        r = requests.post(
+            f"{NODES['vernex-node1']}/consent",
+            json=request.get_json(),
+            timeout=120,
+        )
+        return r.content, r.status_code, {"Content-Type": "application/json"}
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
