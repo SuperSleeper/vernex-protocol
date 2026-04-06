@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -242,9 +243,11 @@ func (s *Scheduler) run(node *Node) {
 const commonsReviewTTL = 60 * time.Second
 
 type pendingReview struct {
-	req       TokenRequest
-	reason    string // why the system suggested upgrade
-	expiresAt time.Time
+	req         TokenRequest
+	reason      string // why the system suggested upgrade
+	expiresAt   time.Time
+	webSearched bool
+	searchQuery string
 }
 
 type commonsAssessment struct {
@@ -434,6 +437,8 @@ type SubmitResponse struct {
 	ResponseTimeMs    int64   `json:"response_time_ms"`
 	ContributionDelta float64 `json:"contribution_delta"`
 	ContributionScore float64 `json:"contribution_score"`
+	WebSearched       bool    `json:"web_searched"`
+	SearchQuery       string  `json:"search_query,omitempty"`
 }
 
 // ContextTurn is one message in a conversation history, as sent by the client.
@@ -463,6 +468,76 @@ func buildPromptWithContext(ctx []ContextTurn, prompt string) string {
 	sb.WriteString(prompt)
 	sb.WriteString(" [/INST]")
 	return sb.String()
+}
+
+// ddgResponse holds the fields we use from the DuckDuckGo Instant Answers API.
+type ddgResponse struct {
+	AbstractText  string `json:"AbstractText"`
+	Answer        string `json:"Answer"`
+	RelatedTopics []struct {
+		Text string `json:"Text"` // category grouping entries have no Text; they're skipped
+	} `json:"RelatedTopics"`
+}
+
+// searchWeb queries the DuckDuckGo Instant Answers API (no key required) and returns
+// a compact formatted string suitable for prepending to a prompt.
+func searchWeb(query string) (string, error) {
+	endpoint := "https://api.duckduckgo.com/?q=" + url.QueryEscape(query) + "&format=json&no_html=1&skip_disambig=1"
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("DDG request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var ddg ddgResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ddg); err != nil {
+		return "", fmt.Errorf("DDG parse error: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("[Web results for: " + query + "]\n")
+
+	if ddg.Answer != "" {
+		sb.WriteString("Answer: " + ddg.Answer + "\n")
+	}
+	if ddg.AbstractText != "" {
+		sb.WriteString("Summary: " + ddg.AbstractText + "\n")
+	}
+
+	count := 0
+	for _, t := range ddg.RelatedTopics {
+		if t.Text == "" {
+			continue // skip category-grouping entries
+		}
+		sb.WriteString("Related: " + t.Text + "\n")
+		count++
+		if count == 3 {
+			break
+		}
+	}
+
+	if ddg.Answer == "" && ddg.AbstractText == "" && count == 0 {
+		return "", fmt.Errorf("DDG returned no usable results for %q", query)
+	}
+	return sb.String(), nil
+}
+
+// needsWebSearch checks the prompt for keywords that signal a need for live/current data.
+// Returns (true, query) when detected; query is the prompt itself since DDG handles
+// natural language well.
+func needsWebSearch(prompt string) (bool, string) {
+	lower := strings.ToLower(prompt)
+	keywords := []string{
+		"today", "current", "latest", "news", "weather", "price",
+		"score", " now", "recently", "who is", "what is happening", "stock",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			return true, prompt
+		}
+	}
+	return false, ""
 }
 
 func NewNode(cfg NodeConfig) *Node {
@@ -641,10 +716,26 @@ func main() {
 			if incoming.Model == "" {
 				incoming.Model = defaultModel
 			}
+			// Web search: augment the prompt with live results when the message
+			// signals a need for current data. Assessment still uses the raw prompt.
+			webSearched := false
+			searchQuery := ""
+			augmentedPrompt := incoming.Prompt
+			if detected, query := needsWebSearch(incoming.Prompt); detected {
+				if results, serr := searchWeb(query); serr == nil {
+					augmentedPrompt = results + "\n" + incoming.Prompt
+					webSearched = true
+					searchQuery = query
+					fmt.Printf("  [🔍] web search: %q\n", query)
+				} else {
+					fmt.Printf("  [!] web search failed: %v — proceeding without\n", serr)
+				}
+			}
+
 			// Build the prompt that will actually be sent to Ollama.
 			// Assessment (assessCommunityBenefit) uses incoming.Prompt alone so that
 			// community-benefit scoring is based on the current message, not history.
-			effectivePrompt := buildPromptWithContext(incoming.Context, incoming.Prompt)
+			effectivePrompt := buildPromptWithContext(incoming.Context, augmentedPrompt)
 
 			// Commons Review: Class 2 requests are assessed for community benefit.
 			// If benefit is detected the system SUGGESTS an upgrade to Class 1.
@@ -665,8 +756,10 @@ func main() {
 							Justification: incoming.Justification,
 							EstimatedCost: incoming.EstimatedCost,
 						},
-						reason:    reason,
-						expiresAt: time.Now().Add(commonsReviewTTL),
+						reason:      reason,
+						expiresAt:   time.Now().Add(commonsReviewTTL),
+						webSearched: webSearched,
+						searchQuery: searchQuery,
 					}
 					node.reviewsMu.Unlock()
 
@@ -713,6 +806,8 @@ func main() {
 				ResponseTimeMs:    result.responseTimeMs,
 				ContributionDelta: result.contributionDelta,
 				ContributionScore: s.ContributionScore,
+				WebSearched:       webSearched,
+				SearchQuery:       searchQuery,
 			})
 		})
 
@@ -794,6 +889,8 @@ func main() {
 				ResponseTimeMs:    result.responseTimeMs,
 				ContributionDelta: result.contributionDelta,
 				ContributionScore: s.ContributionScore,
+				WebSearched:       review.webSearched,
+				SearchQuery:       review.searchQuery,
 			})
 		})
 

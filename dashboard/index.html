@@ -150,6 +150,8 @@
     .chip.green span { color: #3fb950; }
     .chip.blue  span { color: #58a6ff; }
     .chip.amber span { color: #d29922; }
+    .chip.web   { border-color: #388bfd; color: #388bfd; cursor: default; }
+    .chip.web span { color: #388bfd; }
 
     /* Thinking spinner */
     .msg-thinking {
@@ -635,6 +637,10 @@
     const delta    = data.contribution_delta != null ? '+' + data.contribution_delta.toFixed(1) : '—';
     const score    = data.contribution_score != null ? data.contribution_score.toFixed(1) : '—';
 
+    const webChip = data.web_searched
+      ? `<div class="chip web" title="${esc(data.search_query ?? '')}">web&nbsp;<span>✓</span></div>`
+      : '';
+
     el.innerHTML = `
       <div class="response-body">${esc(data.response ?? '')}</div>
       <div class="response-meta">
@@ -644,6 +650,7 @@
         <div class="chip amber">time&nbsp;<span>${ms}</span></div>
         <div class="chip green">Δ&nbsp;<span>${delta}</span></div>
         <div class="chip green">score&nbsp;<span>${score}</span></div>
+        ${webChip}
       </div>`;
     push(el);
   }
