@@ -2,3 +2,4 @@
 config/node.json
 dashboard/venv/
 daemon/vernex-node
+dashboard/__pycache__/
