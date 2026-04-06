@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vernex Protocol — Network Interface</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 14px;
+    }
+
+    body { display: flex; flex-direction: column; }
+
+    /* ── Header ── */
+    header {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0 1.5rem;
+      height: 54px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+    }
+
+    .logo {
+      font-size: 1.05rem;
+      font-weight: bold;
+      color: #58a6ff;
+      letter-spacing: 2px;
+      white-space: nowrap;
+    }
+
+    .patent-badge {
+      font-size: 0.65rem;
+      color: #8b949e;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      padding: 3px 9px;
+      border-radius: 10px;
+      white-space: nowrap;
+    }
+
+    .header-spacer { flex: 1; }
+
+    #node-count {
+      font-size: 0.72rem;
+      color: #3fb950;
+      background: #1a4a1f;
+      border: 1px solid #3fb950;
+      padding: 3px 10px;
+      border-radius: 10px;
+      white-space: nowrap;
+      transition: background 0.2s, color 0.2s, border-color 0.2s;
+    }
+    #node-count.degraded { color: #d29922; background: #3d2e0a; border-color: #d29922; }
+    #node-count.offline  { color: #f85149; background: #3d1a1a; border-color: #f85149; }
+
+    /* ── Main ── */
+    main {
+      flex: 1;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Messages ── */
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.1rem;
+    }
+
+    .messages::-webkit-scrollbar { width: 5px; }
+    .messages::-webkit-scrollbar-track { background: transparent; }
+    .messages::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+
+    .empty-state {
+      margin: auto;
+      text-align: center;
+      color: #484f58;
+    }
+    .empty-state .hex { font-size: 2.5rem; color: #21262d; margin-bottom: 0.75rem; }
+    .empty-state p  { font-size: 0.8rem; line-height: 1.7; }
+
+    /* User prompt bubble */
+    .msg-user {
+      align-self: flex-end;
+      max-width: 68%;
+      background: #1c2d45;
+      border: 1px solid #2d5a9e;
+      border-radius: 12px 12px 2px 12px;
+      padding: 0.75rem 1rem;
+      color: #cdd9e5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.55;
+    }
+    .msg-user .msg-label {
+      font-size: 0.62rem;
+      color: #4d7fa8;
+      margin-bottom: 5px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+
+    /* LLM response card */
+    .msg-response {
+      align-self: flex-start;
+      max-width: 80%;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-left: 3px solid #3fb950;
+      border-radius: 2px 12px 12px 12px;
+    }
+    .response-body {
+      padding: 0.9rem 1rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.65;
+      color: #e6edf3;
+    }
+    .response-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      padding: 0.5rem 0.9rem;
+      background: #0d1117;
+      border-top: 1px solid #30363d;
+      border-radius: 0 0 12px 0;
+    }
+    .chip {
+      font-size: 0.63rem;
+      color: #8b949e;
+      background: #161b22;
+      border: 1px solid #30363d;
+      padding: 2px 7px;
+      border-radius: 8px;
+    }
+    .chip span { color: #e6edf3; }
+    .chip.green span { color: #3fb950; }
+    .chip.blue  span { color: #58a6ff; }
+    .chip.amber span { color: #d29922; }
+
+    /* Thinking spinner */
+    .msg-thinking {
+      align-self: flex-start;
+      color: #484f58;
+      font-size: 0.82rem;
+      padding: 0.3rem 0;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .spinner {
+      width: 12px; height: 12px;
+      border: 2px solid #30363d;
+      border-top-color: #3fb950;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Commons Review card */
+    .msg-review {
+      align-self: stretch;
+      background: #1e1509;
+      border: 1px solid #9e6a03;
+      border-left: 3px solid #d29922;
+      border-radius: 8px;
+      padding: 1rem 1.1rem;
+    }
+    .review-header {
+      font-size: 0.7rem;
+      font-weight: bold;
+      color: #d29922;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 0.55rem;
+    }
+    .review-suggestion {
+      color: #cdd9e5;
+      font-size: 0.85rem;
+      margin-bottom: 0.5rem;
+      line-height: 1.55;
+    }
+    .review-hint {
+      font-size: 0.72rem;
+      color: #8b949e;
+      margin-bottom: 0.9rem;
+      line-height: 1.5;
+    }
+    .review-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .btn-accept, .btn-decline {
+      padding: 6px 16px;
+      font-family: inherit;
+      font-size: 0.75rem;
+      border-radius: 6px;
+      cursor: pointer;
+      letter-spacing: 0.8px;
+      transition: background 0.15s;
+    }
+    .btn-accept  { background: #1a4a1f; border: 1px solid #3fb950; color: #3fb950; }
+    .btn-accept:hover:not(:disabled)  { background: #215c27; }
+    .btn-decline { background: #3d1a1a; border: 1px solid #f85149; color: #f85149; }
+    .btn-decline:hover:not(:disabled) { background: #4d2020; }
+    .btn-accept:disabled, .btn-decline:disabled { opacity: 0.4; cursor: not-allowed; }
+    .review-timer {
+      margin-left: auto;
+      font-size: 0.65rem;
+      color: #9e6a03;
+    }
+    .review-timer.urgent { color: #f85149; }
+
+    /* Error card */
+    .msg-error {
+      align-self: flex-start;
+      max-width: 80%;
+      background: #200e0e;
+      border: 1px solid #f85149;
+      border-left: 3px solid #f85149;
+      border-radius: 2px 8px 8px 8px;
+      padding: 0.7rem 1rem;
+      color: #f85149;
+      font-size: 0.83rem;
+      line-height: 1.5;
+    }
+
+    /* ── Input area ── */
+    .input-area {
+      flex-shrink: 0;
+      padding: 0.9rem 1.5rem 1rem;
+      background: #161b22;
+      border-top: 1px solid #30363d;
+    }
+
+    textarea#prompt {
+      width: 100%;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      color: #e6edf3;
+      font-family: inherit;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      padding: 0.7rem 1rem;
+      resize: none;
+      outline: none;
+      height: 76px;
+      margin-bottom: 0.7rem;
+      transition: border-color 0.15s;
+    }
+    textarea#prompt:focus { border-color: #58a6ff; }
+    textarea#prompt::placeholder { color: #484f58; }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      flex-wrap: wrap;
+    }
+
+    /* Class toggle */
+    .class-toggle {
+      display: flex;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .class-btn {
+      padding: 6px 13px;
+      background: transparent;
+      border: none;
+      color: #8b949e;
+      font-family: inherit;
+      font-size: 0.75rem;
+      cursor: pointer;
+      letter-spacing: 0.4px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .class-btn[data-class="1"].active { background: #1a4a1f; color: #3fb950; }
+    .class-btn[data-class="2"].active { background: #3d2e0a; color: #d29922; }
+
+    select#model-select {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      color: #e6edf3;
+      font-family: inherit;
+      font-size: 0.75rem;
+      padding: 6px 9px;
+      border-radius: 6px;
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    select#model-select:focus { border-color: #58a6ff; }
+
+    .ctrl-spacer { flex: 1; }
+
+    .ctrl-hint {
+      font-size: 0.62rem;
+      color: #484f58;
+    }
+
+    #submit-btn {
+      padding: 6px 22px;
+      background: #1c2d45;
+      border: 1px solid #58a6ff;
+      color: #58a6ff;
+      font-family: inherit;
+      font-size: 0.8rem;
+      border-radius: 6px;
+      cursor: pointer;
+      letter-spacing: 1px;
+      transition: background 0.15s;
+    }
+    #submit-btn:hover:not(:disabled) { background: #243d5e; }
+    #submit-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .turn-counter {
+      font-size: 0.7rem;
+      color: #8b949e;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      padding: 4px 9px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .turn-counter.at-limit { color: #d29922; border-color: #d29922; }
+
+    #new-conv-btn {
+      padding: 6px 12px;
+      background: transparent;
+      border: 1px solid #30363d;
+      color: #8b949e;
+      font-family: inherit;
+      font-size: 0.75rem;
+      border-radius: 6px;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    #new-conv-btn:hover { border-color: #8b949e; color: #e6edf3; }
+
+    .conv-separator {
+      align-self: center;
+      font-size: 0.65rem;
+      color: #484f58;
+      padding: 0.25rem 0;
+      letter-spacing: 1px;
+    }
+
+    /* ── Footer node strip ── */
+    footer {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 1.2rem;
+      padding: 0 1.5rem;
+      height: 44px;
+      background: #0a0d12;
+      border-top: 1px solid #21262d;
+      overflow-x: auto;
+    }
+    footer::-webkit-scrollbar { display: none; }
+
+    .node-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.68rem;
+      white-space: nowrap;
+    }
+    .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot.on  { background: #3fb950; box-shadow: 0 0 5px #3fb950; }
+    .dot.off { background: #f85149; }
+    .pill-name  { color: #8b949e; }
+    .pill-sep   { color: #30363d; }
+    .pill-val   { color: #e6edf3; }
+    .pill-score { color: #3fb950; }
+    .pill-id    { color: #484f58; }
+    .footer-right { margin-left: auto; font-size: 0.63rem; color: #484f58; white-space: nowrap; }
+    .strip-divider { color: #21262d; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <span class="logo">⬡ VERNEX PROTOCOL</span>
+  <span class="patent-badge">Patent Pending US App. 64/015,885</span>
+  <div class="header-spacer"></div>
+  <div id="node-count">— nodes</div>
+</header>
+
+<!-- ── Main ── -->
+<main>
+  <div class="messages" id="messages">
+    <div class="empty-state" id="empty-state">
+      <div class="hex">⬡</div>
+      <p>No requests yet.<br>Enter a prompt and submit to begin.</p>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <textarea id="prompt" placeholder="Enter your prompt…"></textarea>
+    <div class="controls">
+      <div class="class-toggle">
+        <button class="class-btn active" data-class="1">Class 1 — Community</button>
+        <button class="class-btn"        data-class="2">Class 2 — Personal</button>
+      </div>
+      <select id="model-select">
+        <option value="mistral">mistral</option>
+        <option value="llama3.1:8b-instruct-q4_K_M">llama3.1:8b-instruct-q4_K_M</option>
+      </select>
+      <div class="ctrl-spacer"></div>
+      <span class="turn-counter" id="turn-counter">Turn 0 / 10</span>
+      <button id="new-conv-btn">NEW CONV</button>
+      <span class="ctrl-hint">Enter to submit · Shift+Enter for new line</span>
+      <button id="submit-btn">SUBMIT</button>
+    </div>
+  </div>
+</main>
+
+<!-- ── Footer ── -->
+<footer id="node-strip">
+  <span style="color:#484f58;font-size:0.68rem">Polling nodes…</span>
+</footer>
+
+<script>
+  'use strict';
+
+  // ── Configuration ──
+  const MAX_HISTORY_TURNS = 10;
+
+  // ── State ──
+  let selectedClass       = 1;
+  let submitting          = false;
+  let conversationHistory = []; // [{role:'user'|'assistant', content:string}, ...]
+  let pendingUserMsg      = null; // held across commons review consent flow
+
+  // ── Class toggle ──
+  document.querySelectorAll('.class-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.class-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedClass = parseInt(btn.dataset.class, 10);
+    });
+  });
+
+  // ── Keyboard shortcut ──
+  document.getElementById('prompt').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submit();
+    }
+    // Shift+Enter falls through to default — inserts newline
+  });
+  document.getElementById('submit-btn').addEventListener('click', submit);
+
+  // ── New Conversation ──
+  document.getElementById('new-conv-btn').addEventListener('click', () => {
+    conversationHistory = [];
+    pendingUserMsg      = null;
+    updateTurnCounter();
+    appendSeparator();
+  });
+
+  // ── History management ──
+  function buildContext() {
+    // Snapshot of history before the current prompt — what gets sent as context
+    return conversationHistory.slice();
+  }
+
+  function commitToHistory(userMsg, assistantMsg) {
+    conversationHistory.push({ role: 'user',      content: userMsg });
+    conversationHistory.push({ role: 'assistant', content: assistantMsg });
+    // Sliding window: drop oldest exchange when over the limit
+    if (conversationHistory.length > MAX_HISTORY_TURNS * 2) {
+      conversationHistory.splice(0, 2);
+    }
+    updateTurnCounter();
+  }
+
+  function updateTurnCounter() {
+    const turns = Math.floor(conversationHistory.length / 2);
+    const el    = document.getElementById('turn-counter');
+    el.textContent = `Turn ${turns} / ${MAX_HISTORY_TURNS}`;
+    el.classList.toggle('at-limit', turns >= MAX_HISTORY_TURNS);
+  }
+
+  // ── Submit ──
+  async function submit() {
+    if (submitting) return;
+    const promptEl = document.getElementById('prompt');
+    const prompt   = promptEl.value.trim();
+    if (!prompt) return;
+
+    const model   = document.getElementById('model-select').value;
+    const context = buildContext(); // snapshot before this prompt
+
+    submitting     = true;
+    pendingUserMsg = prompt;
+    setSubmitState(true);
+    promptEl.value = '';
+
+    clearEmpty();
+    appendUserMsg(prompt, selectedClass, model);
+    const thinking = appendThinking();
+
+    let data, status;
+    try {
+      console.log('submitting with context:', context);
+      console.log('request body:', JSON.stringify({ prompt, class: selectedClass, model, context }));
+      const res = await fetch('/api/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, class: selectedClass, model, context }),
+      });
+      status = res.status;
+      data   = await res.json();
+    } catch (err) {
+      thinking.remove();
+      pendingUserMsg = null;
+      appendError('Network error: ' + err.message);
+      setSubmitState(false);
+      submitting = false;
+      return;
+    }
+
+    thinking.remove();
+
+    if (data && data.status === 'commons_review') {
+      // pendingUserMsg stays set — commitToHistory deferred until consent response
+      appendReviewCard(data);
+    } else if (status >= 400) {
+      pendingUserMsg = null;
+      appendError(data?.error || `Server error (HTTP ${status})`);
+    } else {
+      commitToHistory(prompt, data.response ?? '');
+      pendingUserMsg = null;
+      appendResponse(data);
+    }
+
+    setSubmitState(false);
+    submitting = false;
+  }
+
+  // ── Consent ──
+  async function sendConsent(reviewId, upgrade, card) {
+    card.querySelector('.review-actions').innerHTML =
+      '<span style="color:#8b949e;font-size:0.75rem">Processing…</span>';
+    card.querySelector('.review-timer')?.remove();
+
+    const thinking = appendThinking();
+
+    let data, status;
+    try {
+      const res = await fetch('/api/consent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ review_id: reviewId, upgrade }),
+      });
+      status = res.status;
+      data   = await res.json();
+    } catch (err) {
+      thinking.remove();
+      appendError('Network error: ' + err.message);
+      return;
+    }
+
+    thinking.remove();
+    card.remove();
+
+    if (status >= 400) {
+      appendError(data?.error || `Consent error (HTTP ${status})`);
+    } else {
+      // Now safe to commit — pendingUserMsg held since submit()
+      commitToHistory(pendingUserMsg ?? '', data.response ?? '');
+      appendResponse(data);
+    }
+    pendingUserMsg = null;
+  }
+
+  // ── DOM helpers ──
+  function clearEmpty() {
+    document.getElementById('empty-state')?.remove();
+  }
+
+  function setSubmitState(busy) {
+    const btn       = document.getElementById('submit-btn');
+    btn.disabled    = busy;
+    btn.textContent = busy ? 'WAITING…' : 'SUBMIT';
+  }
+
+  function appendUserMsg(prompt, cls, model) {
+    const el = div('msg-user');
+    el.innerHTML = `<div class="msg-label">Class ${cls} &nbsp;·&nbsp; ${esc(model)}</div>${esc(prompt)}`;
+    push(el);
+  }
+
+  function appendThinking() {
+    const el = div('msg-thinking');
+    el.innerHTML = '<div class="spinner"></div><span>Waiting for response</span>';
+    push(el);
+    return el;
+  }
+
+  function appendResponse(data) {
+    const el = div('msg-response');
+
+    const routedTo = data.routed_to          ?? '—';
+    const model    = data.model              ?? '—';
+    const cls      = data.class              ?? '—';
+    const ms       = data.response_time_ms   != null ? data.response_time_ms + 'ms' : '—';
+    const delta    = data.contribution_delta != null ? '+' + data.contribution_delta.toFixed(1) : '—';
+    const score    = data.contribution_score != null ? data.contribution_score.toFixed(1) : '—';
+
+    el.innerHTML = `
+      <div class="response-body">${esc(data.response ?? '')}</div>
+      <div class="response-meta">
+        <div class="chip blue">routed&nbsp;<span>${esc(routedTo)}</span></div>
+        <div class="chip">model&nbsp;<span>${esc(model)}</span></div>
+        <div class="chip">class&nbsp;<span>${esc(String(cls))}</span></div>
+        <div class="chip amber">time&nbsp;<span>${ms}</span></div>
+        <div class="chip green">Δ&nbsp;<span>${delta}</span></div>
+        <div class="chip green">score&nbsp;<span>${score}</span></div>
+      </div>`;
+    push(el);
+  }
+
+  function appendReviewCard(data) {
+    const el  = div('msg-review');
+    const ttl = data.expires_in_sec ?? 60;
+
+    el.innerHTML = `
+      <div class="review-header">⬆ Commons Review — Upgrade Suggestion</div>
+      <div class="review-suggestion">${esc(data.suggestion ?? '')}</div>
+      <div class="review-hint">This request may qualify as Class 1 (community benefit).
+        Upgrading increases priority and contribution delta.
+        You have <strong>${ttl}s</strong> to respond.</div>
+      <div class="review-actions">
+        <button class="btn-accept">UPGRADE TO CLASS 1</button>
+        <button class="btn-decline">PROCEED AS CLASS 2</button>
+        <span class="review-timer" id="timer-${esc(data.review_id)}">Expires in ${ttl}s</span>
+      </div>`;
+
+    const accept  = el.querySelector('.btn-accept');
+    const decline = el.querySelector('.btn-decline');
+    const timer   = el.querySelector(`#timer-${CSS.escape(data.review_id)}`);
+
+    accept.addEventListener('click',  () => sendConsent(data.review_id, true,  el));
+    decline.addEventListener('click', () => sendConsent(data.review_id, false, el));
+
+    let remaining = ttl;
+    const interval = setInterval(() => {
+      remaining--;
+      if (!el.isConnected) { clearInterval(interval); return; }
+      if (remaining <= 0) {
+        clearInterval(interval);
+        if (timer) { timer.textContent = 'Expired — auto-ran as Class 2'; timer.classList.add('urgent'); }
+        accept.disabled  = true;
+        decline.disabled = true;
+      } else {
+        if (timer) {
+          timer.textContent = `Expires in ${remaining}s`;
+          if (remaining <= 15) timer.classList.add('urgent');
+        }
+      }
+    }, 1000);
+
+    push(el);
+  }
+
+  function appendError(msg) {
+    const el = div('msg-error');
+    el.textContent = '✗ ' + msg;
+    push(el);
+  }
+
+  function appendSeparator() {
+    const el = div('conv-separator');
+    el.innerHTML = '<span>─── New Conversation ───</span>';
+    push(el);
+  }
+
+  function div(cls) {
+    const el = document.createElement('div');
+    el.className = cls;
+    return el;
+  }
+
+  function push(el) {
+    const m = document.getElementById('messages');
+    m.appendChild(el);
+    m.scrollTop = m.scrollHeight;
+  }
+
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // ── Node status polling ──
+  async function pollNodes() {
+    try {
+      const res  = await fetch('/api/nodes');
+      const data = await res.json();
+      renderCount(data);
+      renderStrip(data);
+    } catch (_) { /* retain last-good state */ }
+  }
+
+  function renderCount(nodes) {
+    const el     = document.getElementById('node-count');
+    const online = Object.values(nodes).filter(n => n.online).length;
+    const total  = Object.keys(nodes).length;
+    el.textContent = `${online}/${total} nodes online`;
+    el.className   = online === total ? '' : online === 0 ? 'offline' : 'degraded';
+  }
+
+  function renderStrip(nodes) {
+    const footer = document.getElementById('node-strip');
+    const pills  = [];
+
+    for (const [name, d] of Object.entries(nodes)) {
+      if (!d.online) {
+        pills.push(`
+          <div class="node-pill">
+            <span class="dot off"></span>
+            <span class="pill-name">${esc(name)}</span>
+            <span class="pill-sep">·</span>
+            <span style="color:#f85149">OFFLINE</span>
+          </div>`);
+      } else {
+        pills.push(`
+          <div class="node-pill">
+            <span class="dot on"></span>
+            <span class="pill-name">${esc(name)}</span>
+            <span class="pill-sep">·</span>
+            <span class="pill-val">${esc(d.uptime)}</span>
+            <span class="pill-sep">·</span>
+            <span class="pill-score">score ${d.contribution_score.toFixed(1)}</span>
+            <span class="pill-sep">·</span>
+            <span class="pill-id">${esc(d.node_id)}</span>
+          </div>`);
+      }
+    }
+
+    footer.innerHTML =
+      pills.join('<span class="strip-divider">│</span>') +
+      '<div style="flex:1"></div>' +
+      '<span class="footer-right">Vernex Protocol v0.5.0</span>';
+  }
+
+  pollNodes();
+  setInterval(pollNodes, 5000);
+</script>
+</body>
+</html>

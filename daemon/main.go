@@ -436,6 +436,35 @@ type SubmitResponse struct {
 	ContributionScore float64 `json:"contribution_score"`
 }
 
+// ContextTurn is one message in a conversation history, as sent by the client.
+type ContextTurn struct {
+	Role    string `json:"role"`    // "user" or "assistant"
+	Content string `json:"content"`
+}
+
+// buildPromptWithContext prepends formatted conversation history to the current prompt
+// so Ollama receives full context without any special token handling.
+// Assessment calls always pass the raw prompt; only inference calls use this.
+func buildPromptWithContext(ctx []ContextTurn, prompt string) string {
+	if len(ctx) == 0 {
+		return prompt
+	}
+	var sb strings.Builder
+	sb.WriteString("[INST] ")
+	sb.WriteString("Here is our conversation so far:\n")
+	for _, turn := range ctx {
+		role := "User"
+		if turn.Role == "assistant" {
+			role = "Assistant"
+		}
+		sb.WriteString(role + ": " + turn.Content + "\n")
+	}
+	sb.WriteString("\nCurrent message: ")
+	sb.WriteString(prompt)
+	sb.WriteString(" [/INST]")
+	return sb.String()
+}
+
 func NewNode(cfg NodeConfig) *Node {
 	hostname, _ := os.Hostname()
 	return &Node{
@@ -590,11 +619,12 @@ func main() {
 				return
 			}
 			var incoming struct {
-				Class         int     `json:"class"`
-				Prompt        string  `json:"prompt"`
-				Model         string  `json:"model"`
-				Justification string  `json:"justification"`
-				EstimatedCost float64 `json:"estimated_cost"`
+				Class         int           `json:"class"`
+				Prompt        string        `json:"prompt"`
+				Model         string        `json:"model"`
+				Justification string        `json:"justification"`
+				EstimatedCost float64       `json:"estimated_cost"`
+				Context       []ContextTurn `json:"context"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 				http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -611,6 +641,10 @@ func main() {
 			if incoming.Model == "" {
 				incoming.Model = defaultModel
 			}
+			// Build the prompt that will actually be sent to Ollama.
+			// Assessment (assessCommunityBenefit) uses incoming.Prompt alone so that
+			// community-benefit scoring is based on the current message, not history.
+			effectivePrompt := buildPromptWithContext(incoming.Context, incoming.Prompt)
 
 			// Commons Review: Class 2 requests are assessed for community benefit.
 			// If benefit is detected the system SUGGESTS an upgrade to Class 1.
@@ -626,7 +660,7 @@ func main() {
 					node.reviews[reviewID] = pendingReview{
 						req: TokenRequest{
 							Class:         2,
-							Prompt:        incoming.Prompt,
+							Prompt:        effectivePrompt,
 							Model:         incoming.Model,
 							Justification: incoming.Justification,
 							EstimatedCost: incoming.EstimatedCost,
@@ -654,7 +688,7 @@ func main() {
 			respCh := make(chan tokenResult, 1)
 			node.scheduler.Enqueue(&TokenRequest{
 				Class:         incoming.Class,
-				Prompt:        incoming.Prompt,
+				Prompt:        effectivePrompt,
 				Model:         incoming.Model,
 				Justification: incoming.Justification,
 				EstimatedCost: incoming.EstimatedCost,
