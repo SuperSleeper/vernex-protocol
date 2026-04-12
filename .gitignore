@@ -1,5 +1,7 @@
 *.log
 config/node.json
+config/node.key
+config/node.pub
 dashboard/venv/
 daemon/vernex-node
 dashboard/__pycache__/

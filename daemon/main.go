@@ -3,17 +3,21 @@ package main
 import (
 	"bytes"
 	"container/heap"
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,13 +27,21 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
+// PeerNode is a known peer whose public key we trust for signature verification.
+type PeerNode struct {
+	Name      string `json:"name"`
+	BaseURL   string `json:"base_url"`
+	PublicKey string `json:"public_key"` // base64-encoded ed25519 public key (32 bytes)
+}
+
 type NodeConfig struct {
-	NodeID               string `json:"node_id"`
-	SocialPartitionPct   int    `json:"social_partition_pct"`
-	PersonalPartitionPct int    `json:"personal_partition_pct"`
-	DaemonPort           int    `json:"daemon_port"`
-	APIPort              int    `json:"api_port"`
-	DashboardPort        int    `json:"dashboard_port"`
+	NodeID               string     `json:"node_id"`
+	SocialPartitionPct   int        `json:"social_partition_pct"`
+	PersonalPartitionPct int        `json:"personal_partition_pct"`
+	DaemonPort           int        `json:"daemon_port"`
+	APIPort              int        `json:"api_port"`
+	DashboardPort        int        `json:"dashboard_port"`
+	PeerNodes            []PeerNode `json:"peer_nodes,omitempty"`
 }
 
 func loadConfig() NodeConfig {
@@ -412,13 +424,60 @@ func generateNodeID() string {
 	return "VRX-" + hex.EncodeToString(b)
 }
 
+// nodeIDFromPublicKey derives a deterministic VRX- ID from an ed25519 public key.
+// ID = "VRX-" + hex(SHA256(pubKey)[:8])
+func nodeIDFromPublicKey(pub ed25519.PublicKey) string {
+	h := sha256.Sum256(pub)
+	return "VRX-" + hex.EncodeToString(h[:8])
+}
+
+// loadOrGenerateKeypair loads an existing ed25519 keypair from configDir or generates
+// and persists a new one. node.key holds the 32-byte seed (mode 0600); node.pub holds
+// the base64-encoded public key for easy sharing with peer operators.
+func loadOrGenerateKeypair(configDir string) (ed25519.PrivateKey, ed25519.PublicKey, error) {
+	keyPath := filepath.Join(configDir, "node.key")
+	pubPath := filepath.Join(configDir, "node.pub")
+
+	seed, err := os.ReadFile(keyPath)
+	if err == nil && len(seed) == ed25519.SeedSize {
+		privKey := ed25519.NewKeyFromSeed(seed)
+		pubKey := privKey.Public().(ed25519.PublicKey)
+		fmt.Printf("  [✓] Keypair loaded from %s\n", keyPath)
+		return privKey, pubKey, nil
+	}
+
+	// Generate new keypair
+	pubKey, privKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generating keypair: %w", err)
+	}
+
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return nil, nil, fmt.Errorf("creating config dir: %w", err)
+	}
+	// Write seed (private key material) with strict permissions
+	if err := os.WriteFile(keyPath, privKey.Seed(), 0600); err != nil {
+		return nil, nil, fmt.Errorf("writing node.key: %w", err)
+	}
+	// Write base64 public key for sharing with peer operators
+	pubB64 := base64.StdEncoding.EncodeToString(pubKey) + "\n"
+	if err := os.WriteFile(pubPath, []byte(pubB64), 0644); err != nil {
+		return nil, nil, fmt.Errorf("writing node.pub: %w", err)
+	}
+	fmt.Printf("  [✓] Keypair generated and saved to %s\n", keyPath)
+	fmt.Printf("  [✓] Public key: %s\n", strings.TrimSpace(pubB64))
+	return privKey, pubKey, nil
+}
+
 type Node struct {
-	cfg       NodeConfig
-	stats     NodeStats
-	mu        sync.RWMutex
-	scheduler *Scheduler
-	reviews   map[string]pendingReview
-	reviewsMu sync.Mutex
+	cfg        NodeConfig
+	stats      NodeStats
+	mu         sync.RWMutex
+	scheduler  *Scheduler
+	reviews    map[string]pendingReview
+	reviewsMu  sync.Mutex
+	privateKey ed25519.PrivateKey
+	publicKey  ed25519.PublicKey
 }
 
 type SubmitRequest struct {
@@ -540,19 +599,21 @@ func needsWebSearch(prompt string) (bool, string) {
 	return false, ""
 }
 
-func NewNode(cfg NodeConfig) *Node {
+func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKey) *Node {
 	hostname, _ := os.Hostname()
 	return &Node{
-		cfg:       cfg,
-		scheduler: NewScheduler(),
-		reviews:   make(map[string]pendingReview),
+		cfg:        cfg,
+		scheduler:  NewScheduler(),
+		reviews:    make(map[string]pendingReview),
+		privateKey: privKey,
+		publicKey:  pubKey,
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.5.0",
+			Version:           "0.6.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -579,15 +640,88 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.5.0  — Patent Pending       ║")
+	fmt.Println("║       v0.6.0  — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
+	fmt.Printf("  Public Key: %s\n", base64.StdEncoding.EncodeToString(n.publicKey))
 	fmt.Printf("  Hostname  : %s\n", s.Hostname)
 	fmt.Printf("  Port      : %d  (P2P)\n", s.Port)
 	fmt.Printf("  HTTP      : %d (dashboard API)\n", s.APIPort)
 	fmt.Printf("  Started   : %s\n", s.StartedAt.Format("2006-01-02 15:04:05"))
 	fmt.Printf("  Partition : %d%% personal / %d%% social\n\n",
 		s.PersonalPartition, s.SocialPartition)
+}
+
+// signRequest adds ed25519 signing headers to an outgoing inter-node HTTP request.
+// Message signed: nodeID + "|" + timestamp + "|" + hex(SHA256(body))
+func (n *Node) signRequest(req *http.Request, body []byte) {
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	h := sha256.Sum256(body)
+	bodyHash := hex.EncodeToString(h[:])
+	msg := n.cfg.NodeID + "|" + ts + "|" + bodyHash
+	sig := ed25519.Sign(n.privateKey, []byte(msg))
+	req.Header.Set("X-Vernex-Node-ID", n.cfg.NodeID)
+	req.Header.Set("X-Vernex-Timestamp", ts)
+	req.Header.Set("X-Vernex-Signature", base64.StdEncoding.EncodeToString(sig))
+}
+
+// verifyPeerRequest verifies the ed25519 signature on an incoming inter-node request.
+// Requests without X-Vernex-Node-ID are treated as local UI / Flask proxy calls and
+// pass through without verification. Returns a non-nil error if headers are present
+// but invalid (bad timestamp, unknown peer, bad signature).
+func (n *Node) verifyPeerRequest(r *http.Request, body []byte) error {
+	nodeID := r.Header.Get("X-Vernex-Node-ID")
+	if nodeID == "" {
+		return nil // unsigned — local request
+	}
+	tsStr := r.Header.Get("X-Vernex-Timestamp")
+	sigB64 := r.Header.Get("X-Vernex-Signature")
+	if tsStr == "" || sigB64 == "" {
+		return fmt.Errorf("incomplete signing headers")
+	}
+
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid timestamp")
+	}
+	age := time.Now().Unix() - ts
+	if age > 30 || age < -5 {
+		return fmt.Errorf("timestamp out of window (%ds)", age)
+	}
+
+	pubKey, err := n.peerPublicKey(nodeID)
+	if err != nil {
+		return err
+	}
+
+	sig, err := base64.StdEncoding.DecodeString(sigB64)
+	if err != nil {
+		return fmt.Errorf("invalid signature encoding")
+	}
+
+	h := sha256.Sum256(body)
+	bodyHash := hex.EncodeToString(h[:])
+	msg := nodeID + "|" + tsStr + "|" + bodyHash
+	if !ed25519.Verify(pubKey, []byte(msg), sig) {
+		return fmt.Errorf("signature mismatch")
+	}
+	return nil
+}
+
+// peerPublicKey looks up a peer's ed25519 public key by deriving its node ID
+// from each configured peer's stored public key and comparing.
+func (n *Node) peerPublicKey(nodeID string) (ed25519.PublicKey, error) {
+	for _, peer := range n.cfg.PeerNodes {
+		raw, err := base64.StdEncoding.DecodeString(peer.PublicKey)
+		if err != nil || len(raw) != ed25519.PublicKeySize {
+			continue
+		}
+		pub := ed25519.PublicKey(raw)
+		if nodeIDFromPublicKey(pub) == nodeID {
+			return pub, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown peer node ID: %s", nodeID)
 }
 
 // takeInhibitorLock takes a systemd-logind sleep/idle inhibitor lock.
@@ -615,7 +749,26 @@ func takeInhibitorLock() (*os.File, error) {
 
 func main() {
 	cfg := loadConfig()
-	node := NewNode(cfg)
+
+	// Load or generate ed25519 keypair; derive node ID from public key.
+	home, _ := os.UserHomeDir()
+	configDir := filepath.Join(home, "vernex", "config")
+	privKey, pubKey, err := loadOrGenerateKeypair(configDir)
+	if err != nil {
+		fmt.Printf("  [!] Keypair error: %v — exiting\n", err)
+		os.Exit(1)
+	}
+	derivedID := nodeIDFromPublicKey(pubKey)
+	if cfg.NodeID != derivedID {
+		fmt.Printf("  [→] Node ID updated: %s → %s (derived from keypair)\n", cfg.NodeID, derivedID)
+		cfg.NodeID = derivedID
+		cfgPath := filepath.Join(configDir, "node.json")
+		if out, merr := json.MarshalIndent(cfg, "", "  "); merr == nil {
+			os.WriteFile(cfgPath, append(out, '\n'), 0644)
+		}
+	}
+
+	node := NewNode(cfg, privKey, pubKey)
 	node.printBanner()
 
 	// Take sleep/idle inhibitor lock via systemd-logind
@@ -693,6 +846,17 @@ func main() {
 				http.Error(w, "POST required", http.StatusMethodNotAllowed)
 				return
 			}
+			// Read body once so it's available for both signature verification and JSON decode.
+			rawBody, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "failed to read body", http.StatusBadRequest)
+				return
+			}
+			if err := node.verifyPeerRequest(r, rawBody); err != nil {
+				fmt.Printf("  [!] /submit rejected — signature: %v\n", err)
+				http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
+				return
+			}
 			var incoming struct {
 				Class         int           `json:"class"`
 				Prompt        string        `json:"prompt"`
@@ -701,7 +865,7 @@ func main() {
 				EstimatedCost float64       `json:"estimated_cost"`
 				Context       []ContextTurn `json:"context"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+			if err := json.NewDecoder(bytes.NewReader(rawBody)).Decode(&incoming); err != nil {
 				http.Error(w, "invalid JSON", http.StatusBadRequest)
 				return
 			}
