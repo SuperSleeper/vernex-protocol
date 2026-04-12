@@ -220,7 +220,7 @@ func (s *Scheduler) run(node *Node) {
 		}
 
 		start := time.Now()
-		llmResp, routedTo, err := routedCallOllama(req.Prompt, model)
+		llmResp, routedTo, err := routedCallOllama(req.Prompt, model, node.ollamaNodes)
 		elapsed := time.Since(start).Milliseconds()
 
 		if err == nil {
@@ -275,14 +275,14 @@ func generateReviewID() string {
 
 // assessCommunityBenefit asks Mistral whether a prompt has broad community value.
 // Returns (shouldReview, reason, error).
-func assessCommunityBenefit(prompt string) (bool, string, error) {
+func assessCommunityBenefit(prompt string, nodes []ollamaNode) (bool, string, error) {
 	assessment := `You are evaluating whether a user request has broad community or educational value that would benefit many people, not just the individual requester. Consider: Is this information publicly useful? Would multiple users benefit from knowing this?
 
 Request: "` + prompt + `"
 
 Respond only with valid JSON and no other text: {"community_benefit": true or false, "reason": "one sentence explanation"}`
 
-	raw, _, err := routedCallOllama(assessment, defaultModel)
+	raw, _, err := routedCallOllama(assessment, defaultModel, nodes)
 	if err != nil {
 		return false, "", err
 	}
@@ -310,11 +310,15 @@ type ollamaNode struct {
 	baseURL string
 }
 
-// ollamaNodes lists all Ollama endpoints in preference order.
-// selectBestNode picks the one with the lowest active model count.
-var ollamaNodes = []ollamaNode{
-	{name: "local", baseURL: "http://localhost:11434"},
-	{name: "node2", baseURL: "http://172.17.0.198:11434"},
+// buildOllamaNodes constructs the Ollama endpoint list from config.
+// Local node is always first; peer nodes are appended from cfg.PeerNodes.
+// No IPs are hardcoded in source — all routing is driven by config/node.json.
+func buildOllamaNodes(cfg NodeConfig) []ollamaNode {
+	nodes := []ollamaNode{{name: "local", baseURL: "http://localhost:11434"}}
+	for _, p := range cfg.PeerNodes {
+		nodes = append(nodes, ollamaNode{name: p.Name, baseURL: p.BaseURL})
+	}
+	return nodes
 }
 
 type ollamaPsResponse struct {
@@ -341,10 +345,10 @@ func checkOllamaLoad(baseURL string) (int, error) {
 
 // selectBestNode returns the available Ollama node with the lowest load.
 // Falls back to the first node if none respond (generate call will surface the error).
-func selectBestNode() ollamaNode {
-	best := ollamaNodes[0]
+func selectBestNode(nodes []ollamaNode) ollamaNode {
+	best := nodes[0]
 	bestLoad := -1
-	for _, n := range ollamaNodes {
+	for _, n := range nodes {
 		load, err := checkOllamaLoad(n.baseURL)
 		if err != nil {
 			continue
@@ -397,15 +401,15 @@ func callOllamaAt(baseURL, model, prompt string) (string, error) {
 // routedCallOllama selects the best available node and calls it.
 // If the selected node fails, it tries remaining nodes before returning an error.
 // Returns (response, routed_to_name, error).
-func routedCallOllama(prompt, model string) (string, string, error) {
-	primary := selectBestNode()
+func routedCallOllama(prompt, model string, nodes []ollamaNode) (string, string, error) {
+	primary := selectBestNode(nodes)
 	response, err := callOllamaAt(primary.baseURL, model, prompt)
 	if err == nil {
 		return response, primary.name, nil
 	}
 	fmt.Printf("  [!] ollama routing: %s failed (%v) — trying fallback nodes\n", primary.name, err)
 
-	for _, n := range ollamaNodes {
+	for _, n := range nodes {
 		if n.baseURL == primary.baseURL {
 			continue
 		}
@@ -470,14 +474,15 @@ func loadOrGenerateKeypair(configDir string) (ed25519.PrivateKey, ed25519.Public
 }
 
 type Node struct {
-	cfg        NodeConfig
-	stats      NodeStats
-	mu         sync.RWMutex
-	scheduler  *Scheduler
-	reviews    map[string]pendingReview
-	reviewsMu  sync.Mutex
-	privateKey ed25519.PrivateKey
-	publicKey  ed25519.PublicKey
+	cfg         NodeConfig
+	stats       NodeStats
+	mu          sync.RWMutex
+	scheduler   *Scheduler
+	reviews     map[string]pendingReview
+	reviewsMu   sync.Mutex
+	privateKey  ed25519.PrivateKey
+	publicKey   ed25519.PublicKey
+	ollamaNodes []ollamaNode
 }
 
 type SubmitRequest struct {
@@ -602,11 +607,12 @@ func needsWebSearch(prompt string) (bool, string) {
 func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKey) *Node {
 	hostname, _ := os.Hostname()
 	return &Node{
-		cfg:        cfg,
-		scheduler:  NewScheduler(),
-		reviews:    make(map[string]pendingReview),
-		privateKey: privKey,
-		publicKey:  pubKey,
+		cfg:         cfg,
+		scheduler:   NewScheduler(),
+		reviews:     make(map[string]pendingReview),
+		privateKey:  privKey,
+		publicKey:   pubKey,
+		ollamaNodes: buildOllamaNodes(cfg),
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
@@ -906,7 +912,7 @@ func main() {
 			// The request is held pending explicit user consent — it is NEVER
 			// reclassified automatically. This is the core patented constraint.
 			if incoming.Class == 2 {
-				benefit, reason, err := assessCommunityBenefit(incoming.Prompt)
+				benefit, reason, err := assessCommunityBenefit(incoming.Prompt, node.ollamaNodes)
 				if err != nil {
 					fmt.Printf("  [!] commons assessment error: %v — proceeding as Class 2\n", err)
 				} else if benefit {

@@ -71,7 +71,15 @@ A Python dashboard provides a real-time view of node status and token activity.
 
 ### Daemon (Go)
 - Loads config from `~/vernex/config/node.json` on startup; falls back to defaults if missing
-- Generates a unique `VRX-{hex}` Node ID on first run; persists it to config for stable identity
+- On first boot, generates an ed25519 keypair; Node ID is `VRX-` + `hex(SHA256(pubKey)[:8])`
+  — identity is cryptographically tied to the keypair, not random
+- Keypair files: `config/node.key` (seed, mode 0600) and `config/node.pub` (base64, shareable)
+- **`peer_nodes` in `config/node.json` is the single source of truth for both routing and trust**:
+  - Ollama routing: `buildOllamaNodes(cfg)` builds the endpoint list from `peer_nodes[].base_url`
+  - Signature verification: public key looked up from `peer_nodes[].public_key` (base64 ed25519)
+  - **No IPs are ever hardcoded in source code** — all addresses live in config only
+- Incoming `/submit` with `X-Vernex-Node-ID` header: verifies ed25519 signature + 30s timestamp
+  window; unsigned requests (local UI / Flask proxy) pass through without verification
 - Takes systemd-logind sleep/idle inhibitor lock via D-Bus on startup (gracefully skipped if unavailable)
 - Handles SIGINT/SIGTERM cleanly — releases inhibitor and exits
 - Listens on configurable P2P port (default 7700) for TCP connections
@@ -79,10 +87,23 @@ A Python dashboard provides a real-time view of node status and token activity.
 - Tracks: uptime, total connections, contribution score, queue depth
 - Partition: configurable per-node (default 70% personal / 30% social)
 - Token priority queue: Class 1 before Class 2, FIFO within class (heap-based)
-- LLM backend: Ollama at localhost:11434, model: mistral
+- LLM backend: Ollama at localhost:11434 + peers from config; load-balanced via `/api/ps`
 - Commons Review: Class 2 requests assessed for community benefit via Mistral;
   upgrade suggested via `status: commons_review` response; explicit `/consent` required;
   pending reviews expire after 60s and auto-execute as Class 2
+
+### Adding a peer node
+1. Run the daemon on the new node to generate its keypair
+2. Copy `config/node.pub` (base64 public key) from the new node
+3. Add to **both** nodes' `config/node.json`:
+```json
+"peer_nodes": [{
+  "name": "node2",
+  "base_url": "http://<ip>:11434",
+  "public_key": "<base64 from node2's node.pub>"
+}]
+```
+4. Restart both daemons — routing and trust are now live
 
 ### HTTP API Endpoints
 | Endpoint | Method | Description |
@@ -286,6 +307,8 @@ cd daemon && go build -o vernex-node .
 | Apr 2026 | Multi-node routing via /api/ps load check | Picks lowest active-model count; 3s timeout on load check; fallback to other node on failure |
 | Apr 2026 | model field optional in /submit (default mistral) | Supports mistral:7b-instruct-q4_K_M and llama3.1:8b-instruct-q4_K_M on both nodes |
 | Apr 2026 | node_id persisted even when config file absent | Creates ~/vernex/config/node.json with defaults + generated ID on first run |
+| Apr 2026 | No hardcoded IPs in source — all from config | peer_nodes drives both Ollama routing and ed25519 trust; adding a peer = editing config only |
+| Apr 2026 | ed25519 node signing; Node ID derived from pubkey | Cryptographic identity; replay protection via 30s timestamp window |
 | Mar 2026 | upgrade field is pointer (*bool) in consent | Prevents implicit consent — omitting upgrade returns 400; legally significant |
 | Mar 2026 | Pending reviews expire as Class 2, not dropped | User gets their answer even if they miss the consent window |
 
