@@ -13,12 +13,12 @@ A Python dashboard provides a real-time view of node status and token activity.
 
 ---
 
-## Current State (as of April 4, 2026)
+## Current State (as of April 18, 2026)
 
 ### Working
-- Go daemon v0.5.0 running on Node-1 (Node-2 pending pull/build)
+- Go daemon v0.7.0 running on Node-1 (Node-2 pending pull/build)
 - P2P TCP listener on port 7700
-- HTTP API on port 7701: `/status`, `/health`, `/submit`, `/consent`, `/queue`
+- **HTTPS** API on port 7701: `/status`, `/health`, `/submit`, `/consent`, `/queue`
 - Contribution score tracking (increments over time, per connection, and per LLM job)
 - Python Flask dashboard at localhost:5000 polling both nodes every 5 seconds
 - Both nodes ONLINE and visible in dashboard
@@ -49,7 +49,7 @@ A Python dashboard provides a real-time view of node status and token activity.
 ```
 ~/vernex/
   daemon/
-    main.go          ← Go daemon source (v0.4.0)
+    main.go          ← Go daemon source (v0.7.0)
     go.mod           ← Go module file
     go.sum           ← dependency checksums
     vernex-node      ← compiled binary (gitignored)
@@ -78,6 +78,12 @@ A Python dashboard provides a real-time view of node status and token activity.
   - Ollama routing: `buildOllamaNodes(cfg)` builds the endpoint list from `peer_nodes[].base_url`
   - Signature verification: public key looked up from `peer_nodes[].public_key` (base64 ed25519)
   - **No IPs are ever hardcoded in source code** — all addresses live in config only
+- **Port 7701 serves HTTPS** using a self-signed X.509 certificate derived from the node's
+  ed25519 keypair at startup (`buildTLSConfig`). The cert is generated in memory — no cert
+  files on disk. Dashboard and peer clients use `InsecureSkipVerify: true` / `verify=False`
+  because transport-layer trust is redundant with the ed25519 payload signatures already in
+  place. **`InsecureSkipVerify` is temporary** — it will be replaced by a distributed CA
+  (with ML-DSA certificate chains) in a future phase. Do not remove it until that CA is live.
 - Incoming `/submit` with `X-Vernex-Node-ID` header: verifies ed25519 signature + 30s timestamp
   window; unsigned requests (local UI / Flask proxy) pass through without verification
 - Takes systemd-logind sleep/idle inhibitor lock via D-Bus on startup (gracefully skipped if unavailable)
@@ -311,6 +317,7 @@ cd daemon && go build -o vernex-node .
 | Apr 2026 | ed25519 node signing; Node ID derived from pubkey | Cryptographic identity; replay protection via 30s timestamp window |
 | Mar 2026 | upgrade field is pointer (*bool) in consent | Prevents implicit consent — omitting upgrade returns 400; legally significant |
 | Mar 2026 | Pending reviews expire as Class 2, not dropped | User gets their answer even if they miss the consent window |
+| Apr 2026 | TLS on port 7701 with self-signed cert from ed25519 keypair | Encrypts inter-node traffic; cert generated in memory at startup, no extra key files. InsecureSkipVerify used by peers/dashboard — temporary pending distributed CA + ML-DSA upgrade |
 
 ---
 

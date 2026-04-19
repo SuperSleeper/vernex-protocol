@@ -6,8 +6,8 @@ import os
 app = Flask(__name__)
 
 NODES = {
-    "vernex-node1": "http://localhost:7701",
-    "vernex-node2": "http://172.17.0.198:7701",
+    "vernex-node1": "https://localhost:7701",
+    "vernex-node2": "https://172.17.0.198:7701",
 }
 
 DASHBOARD_HTML = """
@@ -133,7 +133,7 @@ def index():
 
     for name, url in NODES.items():
         try:
-            r = requests.get(f"{url}/status", timeout=2)
+            r = requests.get(f"{url}/status", timeout=2, verify=False)
             d = r.json()
             nodes[name] = {
                 "online": True,
@@ -168,7 +168,7 @@ def api_nodes():
     nodes = {}
     for name, url in NODES.items():
         try:
-            r = requests.get(f"{url}/status", timeout=2)
+            r = requests.get(f"{url}/status", timeout=2, verify=False)
             d = r.json()
             nodes[name] = {
                 "online": True,
@@ -189,6 +189,7 @@ def api_submit():
             f"{NODES['vernex-node1']}/submit",
             json=request.get_json(),
             timeout=120,
+            verify=False,
         )
         return r.content, r.status_code, {"Content-Type": "application/json"}
     except Exception as e:
@@ -202,6 +203,7 @@ def api_consent():
             f"{NODES['vernex-node1']}/consent",
             json=request.get_json(),
             timeout=120,
+            verify=False,
         )
         return r.content, r.status_code, {"Content-Type": "application/json"}
     except Exception as e:

@@ -6,11 +6,15 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -473,6 +477,36 @@ func loadOrGenerateKeypair(configDir string) (ed25519.PrivateKey, ed25519.Public
 	return privKey, pubKey, nil
 }
 
+// buildTLSConfig generates a self-signed X.509 certificate from the node's existing
+// ed25519 keypair and returns a *tls.Config for the HTTP API server.
+// Peer clients use InsecureSkipVerify because trust is enforced by ed25519 payload
+// signatures — the distributed CA upgrade (with ML-DSA) will replace this later.
+func buildTLSConfig(privKey ed25519.PrivateKey, pubKey ed25519.PublicKey, nodeID string) (*tls.Config, error) {
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, fmt.Errorf("serial number: %w", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: nodeID},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, pubKey, privKey)
+	if err != nil {
+		return nil, fmt.Errorf("creating TLS cert: %w", err)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{certDER},
+			PrivateKey:  privKey,
+		}},
+	}, nil
+}
+
 type Node struct {
 	cfg         NodeConfig
 	stats       NodeStats
@@ -619,7 +653,7 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.6.0",
+			Version:           "0.7.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -646,7 +680,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.6.0  — Patent Pending       ║")
+	fmt.Println("║       v0.7.0  — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Public Key: %s\n", base64.StdEncoding.EncodeToString(n.publicKey))
@@ -772,6 +806,12 @@ func main() {
 		if out, merr := json.MarshalIndent(cfg, "", "  "); merr == nil {
 			os.WriteFile(cfgPath, append(out, '\n'), 0644)
 		}
+	}
+
+	tlsCfg, err := buildTLSConfig(privKey, pubKey, cfg.NodeID)
+	if err != nil {
+		fmt.Printf("  [!] TLS config error: %v — exiting\n", err)
+		os.Exit(1)
 	}
 
 	node := NewNode(cfg, privKey, pubKey)
@@ -1073,8 +1113,13 @@ func main() {
 				"class_2": c2,
 			})
 		})
-		fmt.Printf("  [✓] Dashboard API listening on port %d\n", node.cfg.APIPort)
-		http.ListenAndServe(fmt.Sprintf(":%d", node.cfg.APIPort), nil)
+		fmt.Printf("  [✓] Dashboard API (HTTPS) listening on port %d\n", node.cfg.APIPort)
+		srv := &http.Server{
+			Addr:      fmt.Sprintf(":%d", node.cfg.APIPort),
+			TLSConfig: tlsCfg,
+		}
+		// ListenAndServeTLS with empty strings uses certs already in TLSConfig.
+		srv.ListenAndServeTLS("", "")
 	}()
 
 	// Start P2P listener
