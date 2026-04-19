@@ -45,6 +45,7 @@ type NodeConfig struct {
 	DaemonPort           int        `json:"daemon_port"`
 	APIPort              int        `json:"api_port"`
 	DashboardPort        int        `json:"dashboard_port"`
+	RateLimitPerMin      int        `json:"rate_limit_per_min"`
 	PeerNodes            []PeerNode `json:"peer_nodes,omitempty"`
 }
 
@@ -55,6 +56,7 @@ func loadConfig() NodeConfig {
 		DaemonPort:           7700,
 		APIPort:              7701,
 		DashboardPort:        5000,
+		RateLimitPerMin:      60,
 	}
 
 	home, err := os.UserHomeDir()
@@ -477,6 +479,82 @@ func loadOrGenerateKeypair(configDir string) (ed25519.PrivateKey, ed25519.Public
 	return privKey, pubKey, nil
 }
 
+// --- Rate Limiter ---
+
+// RateLimiter enforces a per-key sliding-window rate limit.
+// For signed inter-node requests the key is the peer's node ID;
+// for unsigned local requests the key is the source IP address.
+type RateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string][]time.Time
+	limit   int // max requests per 60-second window
+}
+
+func NewRateLimiter(limit int) *RateLimiter {
+	return &RateLimiter{
+		buckets: make(map[string][]time.Time),
+		limit:   limit,
+	}
+}
+
+// Allow returns true if the key is under the rate limit, false if it should be rejected.
+func (rl *RateLimiter) Allow(key string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-60 * time.Second)
+
+	bucket := rl.buckets[key]
+	// Prune timestamps outside the sliding window
+	valid := bucket[:0]
+	for _, t := range bucket {
+		if t.After(cutoff) {
+			valid = append(valid, t)
+		}
+	}
+	if len(valid) >= rl.limit {
+		rl.buckets[key] = valid
+		return false
+	}
+	rl.buckets[key] = append(valid, now)
+	return true
+}
+
+// PruneEmpty removes buckets that have no timestamps in the last 60 seconds.
+// Called periodically to prevent unbounded memory growth from stale keys.
+func (rl *RateLimiter) PruneEmpty() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	cutoff := time.Now().Add(-60 * time.Second)
+	for key, bucket := range rl.buckets {
+		active := false
+		for _, t := range bucket {
+			if t.After(cutoff) {
+				active = true
+				break
+			}
+		}
+		if !active {
+			delete(rl.buckets, key)
+		}
+	}
+}
+
+// rateLimitKey returns the rate-limit key for an incoming request:
+// the peer node ID for signed inter-node requests, or the source IP for unsigned local ones.
+func rateLimitKey(r *http.Request) string {
+	if id := r.Header.Get("X-Vernex-Node-ID"); id != "" {
+		return id
+	}
+	// Strip port from RemoteAddr (host:port or [::1]:port)
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 // buildTLSConfig generates a self-signed X.509 certificate from the node's existing
 // ed25519 keypair and returns a *tls.Config for the HTTP API server.
 // Peer clients use InsecureSkipVerify because trust is enforced by ed25519 payload
@@ -517,6 +595,7 @@ type Node struct {
 	privateKey  ed25519.PrivateKey
 	publicKey   ed25519.PublicKey
 	ollamaNodes []ollamaNode
+	rateLimiter *RateLimiter
 }
 
 type SubmitRequest struct {
@@ -640,6 +719,10 @@ func needsWebSearch(prompt string) (bool, string) {
 
 func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKey) *Node {
 	hostname, _ := os.Hostname()
+	limit := cfg.RateLimitPerMin
+	if limit <= 0 {
+		limit = 60
+	}
 	return &Node{
 		cfg:         cfg,
 		scheduler:   NewScheduler(),
@@ -647,6 +730,7 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 		privateKey:  privKey,
 		publicKey:   pubKey,
 		ollamaNodes: buildOllamaNodes(cfg),
+		rateLimiter: NewRateLimiter(limit),
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
@@ -876,6 +960,14 @@ func main() {
 		}
 	}()
 
+	// Prune stale rate-limiter buckets every 5 minutes to prevent memory growth
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		for range ticker.C {
+			node.rateLimiter.PruneEmpty()
+		}
+	}()
+
 	// Start HTTP status API on port 7701
 	go func() {
 		http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
@@ -901,6 +993,12 @@ func main() {
 			if err := node.verifyPeerRequest(r, rawBody); err != nil {
 				fmt.Printf("  [!] /submit rejected — signature: %v\n", err)
 				http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
+				return
+			}
+			key := rateLimitKey(r)
+			if !node.rateLimiter.Allow(key) {
+				fmt.Printf("  [!] /submit rate limited  key=%s\n", key)
+				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 				return
 			}
 			var incoming struct {
@@ -1028,6 +1126,12 @@ func main() {
 		http.HandleFunc("/consent", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost {
 				http.Error(w, "POST required", http.StatusMethodNotAllowed)
+				return
+			}
+			key := rateLimitKey(r)
+			if !node.rateLimiter.Allow(key) {
+				fmt.Printf("  [!] /consent rate limited  key=%s\n", key)
+				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 				return
 			}
 			var req struct {
