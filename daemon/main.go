@@ -112,9 +112,6 @@ type NodeStats struct {
 	SocialPartition   int       `json:"social_partition_pct"`
 	PersonalPartition int       `json:"personal_partition_pct"`
 	QueueDepth        int       `json:"queue_depth"`
-	IPAddress         string    `json:"ip_address"`
-	Gateway           string    `json:"gateway"`
-	PublicIP          string    `json:"public_ip"`
 }
 
 // --- Token Priority Queue ---
@@ -631,17 +628,28 @@ func buildTLSConfig(privKey ed25519.PrivateKey, pubKey ed25519.PublicKey, nodeID
 }
 
 type Node struct {
-	cfg          NodeConfig
-	stats        NodeStats
-	mu           sync.RWMutex
-	scheduler    *Scheduler
-	reviews      map[string]pendingReview
-	reviewsMu    sync.Mutex
-	privateKey   ed25519.PrivateKey
-	publicKey    ed25519.PublicKey
-	ollamaNodes  []ollamaNode
-	rateLimiter  *RateLimiter
-	peerRegistry *PeerRegistry
+	cfg            NodeConfig
+	stats          NodeStats
+	mu             sync.RWMutex
+	scheduler      *Scheduler
+	reviews        map[string]pendingReview
+	reviewsMu      sync.Mutex
+	privateKey     ed25519.PrivateKey
+	publicKey      ed25519.PublicKey
+	ollamaNodes    []ollamaNode
+	rateLimiter    *RateLimiter
+	peerRegistry   *PeerRegistry
+	cachedPublicIP atomic.Value // string; refreshed every 10 min by a background goroutine
+}
+
+// statusResponse is the /status payload. It embeds the static NodeStats fields
+// and adds ip_address, gateway, and public_ip which are computed live on each call
+// (ip_address and gateway are instant local calls; public_ip comes from the cache).
+type statusResponse struct {
+	NodeStats
+	IPAddress string `json:"ip_address"`
+	Gateway   string `json:"gateway"`
+	PublicIP  string `json:"public_ip"`
 }
 
 type SubmitRequest struct {
@@ -769,7 +777,7 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 	if limit <= 0 {
 		limit = 60
 	}
-	return &Node{
+	n := &Node{
 		cfg:          cfg,
 		scheduler:    NewScheduler(),
 		reviews:      make(map[string]pendingReview),
@@ -787,11 +795,10 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 			Version:           "0.7.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
-			IPAddress:         outboundIP("8.8.8.8"),
-			Gateway:           defaultGateway(),
-			PublicIP:          fetchPublicIP(),
 		},
 	}
+	n.cachedPublicIP.Store(fetchPublicIP())
+	return n
 }
 
 func (n *Node) recordConnection() {
@@ -1116,9 +1123,7 @@ func main() {
 		ticker := time.NewTicker(10 * time.Minute)
 		for range ticker.C {
 			ip := fetchPublicIP()
-			node.mu.Lock()
-			node.stats.PublicIP = ip
-			node.mu.Unlock()
+			node.cachedPublicIP.Store(ip)
 			fmt.Printf("  [→] public IP refreshed: %s\n", ip)
 		}
 	}()
@@ -1143,7 +1148,13 @@ func main() {
 		http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Access-Control-Allow-Origin", "*")
-			json.NewEncoder(w).Encode(node.getStats())
+			pubIP, _ := node.cachedPublicIP.Load().(string)
+			json.NewEncoder(w).Encode(statusResponse{
+				NodeStats: node.getStats(),
+				IPAddress: outboundIP("8.8.8.8"),
+				Gateway:   defaultGateway(),
+				PublicIP:  pubIP,
+			})
 		})
 		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
