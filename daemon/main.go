@@ -114,6 +114,7 @@ type NodeStats struct {
 	QueueDepth        int       `json:"queue_depth"`
 	IPAddress         string    `json:"ip_address"`
 	Gateway           string    `json:"gateway"`
+	PublicIP          string    `json:"public_ip"`
 }
 
 // --- Token Priority Queue ---
@@ -788,6 +789,7 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 			PersonalPartition: cfg.PersonalPartitionPct,
 			IPAddress:         outboundIP("8.8.8.8"),
 			Gateway:           defaultGateway(),
+			PublicIP:          fetchPublicIP(),
 		},
 	}
 }
@@ -946,6 +948,26 @@ func defaultGateway() string {
 	return "unknown"
 }
 
+// fetchPublicIP queries api.ipify.org for the node's public IP address.
+// Returns "behind NAT" on any failure so the status endpoint always has a value.
+func fetchPublicIP() string {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("https://api.ipify.org")
+	if err != nil {
+		return "behind NAT"
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return "behind NAT"
+	}
+	ip := strings.TrimSpace(string(body))
+	if net.ParseIP(ip) == nil {
+		return "behind NAT"
+	}
+	return ip
+}
+
 // peerAPIURL derives a peer's daemon API URL from its Ollama base_url by
 // replacing the port with 7701 and switching to https.
 func peerAPIURL(peer PeerNode) (string, error) {
@@ -1086,6 +1108,18 @@ func main() {
 		ticker := time.NewTicker(5 * time.Minute)
 		for range ticker.C {
 			node.rateLimiter.PruneEmpty()
+		}
+	}()
+
+	// Re-fetch public IP every 10 minutes — it can change on dynamic ISP addresses.
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		for range ticker.C {
+			ip := fetchPublicIP()
+			node.mu.Lock()
+			node.stats.PublicIP = ip
+			node.mu.Unlock()
+			fmt.Printf("  [→] public IP refreshed: %s\n", ip)
 		}
 	}()
 

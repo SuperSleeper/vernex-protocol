@@ -51,7 +51,13 @@ DASHBOARD_HTML = """
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #0d1117; color: #e6edf3; font-family: 'Courier New', monospace; padding: 2rem; }
     h1 { color: #58a6ff; font-size: 1.4rem; margin-bottom: 0.25rem; letter-spacing: 2px; }
-    .subtitle { color: #8b949e; font-size: 0.8rem; margin-bottom: 2rem; }
+    .subtitle { color: #8b949e; font-size: 0.8rem; }
+    .top-bar { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem; }
+    .top-right { display: flex; align-items: center; gap: 1rem; padding-top: 0.2rem; }
+    .refresh-note { color: #8b949e; font-size: 0.7rem; }
+    .toggle-btn { background: none; border: 1px solid #30363d; color: #8b949e; font-family: 'Courier New', monospace; font-size: 0.75rem; padding: 4px 10px; cursor: pointer; border-radius: 4px; letter-spacing: 1px; }
+    .toggle-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+    /* ── Cards ── */
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 1.5rem; }
     .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; }
     .card.online { border-left: 4px solid #3fb950; }
@@ -75,18 +81,33 @@ DASHBOARD_HTML = """
     .bar-track { background: #0d1117; border-radius: 4px; height: 20px; overflow: hidden; display: flex; }
     .bar-personal { background: #1f6feb; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; color: #e6edf3; }
     .bar-social { background: #3fb950; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; color: #0d1117; font-weight: bold; }
+    /* ── Compact table ── */
+    .compact-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    .compact-table th { color: #8b949e; text-transform: uppercase; letter-spacing: 1px; font-size: 0.65rem; padding: 0.5rem 0.8rem; text-align: left; border-bottom: 1px solid #30363d; white-space: nowrap; }
+    .compact-table td { padding: 0.55rem 0.8rem; border-bottom: 1px solid #21262d; white-space: nowrap; }
+    .compact-table tbody tr:nth-child(odd) td { background: #0d1117; }
+    .compact-table tbody tr:nth-child(even) td { background: #161b22; }
+    .ct-online { color: #3fb950; font-weight: bold; }
+    .ct-offline { color: #f85149; font-weight: bold; }
+    /* ── Footer ── */
     .footer { margin-top: 2rem; color: #8b949e; font-size: 0.75rem; text-align: center; }
-    .refresh-note { color: #8b949e; font-size: 0.7rem; }
     .version { color: #8b949e; font-size: 0.75rem; }
   </style>
 </head>
 <body>
-  <h1>⬡ VERNEX PROTOCOL</h1>
-  <p class="subtitle">Network Dashboard — Patent Pending US App. 64/015,885 &nbsp;|&nbsp;
-    <span class="refresh-note">Auto-refreshes every 5 seconds</span>
-  </p>
+  <div class="top-bar">
+    <div>
+      <h1>⬡ VERNEX PROTOCOL</h1>
+      <p class="subtitle">Network Dashboard — Patent Pending US App. 64/015,885</p>
+    </div>
+    <div class="top-right">
+      <span class="refresh-note">Auto-refreshes every 5s</span>
+      <button class="toggle-btn" id="toggle-btn" onclick="toggleMode()">[COMPACT]</button>
+    </div>
+  </div>
 
-  <div class="grid">
+  <!-- Cards view (default) -->
+  <div class="grid" id="cards-view">
     {% for name, data in nodes.items() %}
     <div class="card {{ 'online' if data.online else 'offline' }}">
       <div class="node-header">
@@ -126,8 +147,8 @@ DASHBOARD_HTML = """
           <div class="stat-value ip">{{ data.ip_address }}</div>
         </div>
         <div class="stat">
-          <div class="stat-label">Gateway</div>
-          <div class="stat-value ip">{{ data.gateway }}</div>
+          <div class="stat-label">Public IP</div>
+          <div class="stat-value ip">{{ data.public_ip }}</div>
         </div>
       </div>
 
@@ -147,10 +168,68 @@ DASHBOARD_HTML = """
     {% endfor %}
   </div>
 
+  <!-- Compact view -->
+  <div id="compact-view" style="display:none">
+    <table class="compact-table">
+      <thead>
+        <tr>
+          <th>Node ID</th>
+          <th>Status</th>
+          <th>IP</th>
+          <th>Public IP</th>
+          <th>Uptime</th>
+          <th>Score</th>
+          <th>Version</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for name, data in nodes.items() %}
+        <tr>
+          <td>
+            <div style="font-weight:bold; color:#e6edf3;">{{ name }}</div>
+            {% if data.online %}<div style="font-size:0.65rem; color:#58a6ff; margin-top:2px;">{{ data.node_id }}</div>{% endif %}
+          </td>
+          <td class="{{ 'ct-online' if data.online else 'ct-offline' }}">
+            {{ 'ONLINE' if data.online else 'OFFLINE' }}
+          </td>
+          <td style="color:#8b949e;">{{ data.ip_address if data.online else '—' }}</td>
+          <td style="color:#8b949e;">{{ data.public_ip if data.online else '—' }}</td>
+          <td style="color:#58a6ff;">{{ data.uptime if data.online else '—' }}</td>
+          <td style="color:#3fb950;">{{ "%.1f"|format(data.contribution_score) if data.online else '—' }}</td>
+          <td style="color:#8b949e;">{{ 'v' + data.version if data.online else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
   <div class="footer">
     Vernex Protocol v0.2.0 &nbsp;|&nbsp; {{ total_online }} of {{ total_nodes }} nodes online
     &nbsp;|&nbsp; Network score: {{ "%.1f"|format(network_score) }}
   </div>
+
+  <script>
+    function applyMode(mode) {
+      var cards = document.getElementById('cards-view');
+      var compact = document.getElementById('compact-view');
+      var btn = document.getElementById('toggle-btn');
+      if (mode === 'compact') {
+        cards.style.display = 'none';
+        compact.style.display = 'block';
+        btn.textContent = '[CARDS]';
+      } else {
+        cards.style.display = 'grid';
+        compact.style.display = 'none';
+        btn.textContent = '[COMPACT]';
+      }
+    }
+    function toggleMode() {
+      var next = (localStorage.getItem('vernex-view') || 'cards') === 'compact' ? 'cards' : 'compact';
+      localStorage.setItem('vernex-view', next);
+      applyMode(next);
+    }
+    applyMode(localStorage.getItem('vernex-view') || 'cards');
+  </script>
 </body>
 </html>
 """
@@ -186,7 +265,7 @@ def index():
                 "personal_partition_pct": d["personal_partition_pct"],
                 "social_partition_pct": d["social_partition_pct"],
                 "ip_address": d.get("ip_address", "—"),
-                "gateway": d.get("gateway", "—"),
+                "public_ip": d.get("public_ip", "—"),
             }
             total_online += 1
             network_score += d["contribution_score"]
