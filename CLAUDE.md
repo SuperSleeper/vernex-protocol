@@ -227,6 +227,54 @@ Create service files so the daemon starts automatically on boot (also fixes Node
 
 ---
 
+## Node Management Scripts
+
+Both scripts live in `scripts/` and are idempotent (safe to re-run).
+Run as a normal user — they invoke `sudo` internally where needed.
+
+### `scripts/vernex-node-setup.sh` — provision a fresh node
+Takes a clean Pop!_OS install to a fully running Vernex node in one shot:
+
+| Step | What it does |
+|------|-------------|
+| GPU | Detects NVIDIA/AMD via `lspci`; installs `nvidia-driver-535` or ROCm if missing |
+| Go | Checks for Go ≥1.21; downloads and installs 1.22.5 if absent |
+| Ollama | Installs via official script; creates systemd override for `OLLAMA_HOST=0.0.0.0` |
+| Models | Pulls `mistral:7b-instruct-q4_K_M` and `llama3.1:8b-instruct-q4_K_M`; skips if present |
+| Dirs | Creates `~/vernex/{config,logs,scripts,daemon,dashboard}/` |
+| Repo | Clones `github.com/SuperSleeper/vernex-protocol` or `git pull`s if already present |
+| Config | Creates `config/node.json` with defaults and empty `node_id`; never overwrites existing |
+| Build | `go build -o vernex-node .` |
+| Venv | Creates `dashboard/venv` and `pip install -r requirements.txt` |
+| Services | Substitutes real `$USER`/`$HOME` into service files; `systemctl enable --now` |
+| Polkit | Installs `90-vernex-inhibit.rules` with real username substituted |
+| Summary | Prints node ID, public key, version, URLs, and service status on completion |
+
+```bash
+bash scripts/vernex-node-setup.sh
+```
+
+### `scripts/vernex-node-wipe.sh` — clean uninstall
+Undoes everything `vernex-node-setup.sh` did. Does **not** remove Ollama, Go, GPU
+drivers, or Ollama models — those belong to the system.
+
+| Step | What it removes |
+|------|----------------|
+| Services | Stops, disables, and deletes `vernex-daemon` and `vernex-dashboard` |
+| Polkit | Removes `/etc/polkit-1/rules.d/90-vernex-inhibit.rules` |
+| Ollama override | Removes `ollama.service.d/override.conf`; restarts Ollama (localhost-only binding restored) |
+| `~/vernex/` | Prompts for `YES` confirmation before deleting — warns that node keys are unrecoverable |
+
+```bash
+bash scripts/vernex-node-wipe.sh
+```
+
+**Warning:** wiping `~/vernex/` destroys `config/node.key` and `config/node.pub`.
+The node identity (`VRX-xxxx`) is permanently lost. Back up the keypair before wiping
+if you plan to re-register the same node identity with the network.
+
+---
+
 ## How to Run
 
 ### Start daemon (Node-1)
