@@ -2,13 +2,52 @@ from flask import Flask, render_template_string, jsonify, request, send_from_dir
 import requests
 import json
 import os
+import sys
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 
-NODES = {
-    "vernex-node1": "https://localhost:7701",
-    "vernex-node2": "https://172.17.0.198:7701",
-}
+_CONFIG_PATH = os.path.expanduser("~/vernex/config/node.json")
+LOCAL_URL = "https://localhost:7701"
+
+
+def load_nodes():
+    """Build NODES dict from config/node.json.
+
+    Local node is always included as https://localhost:7701.
+    Peers are derived from peer_nodes[].base_url with port 7701 and https scheme.
+    Falls back to localhost-only on any config read failure.
+    """
+    nodes = {}
+    try:
+        with open(_CONFIG_PATH) as f:
+            cfg = json.load(f)
+
+        local_name = cfg.get("node_id") or "local"
+        nodes[local_name] = LOCAL_URL
+
+        for peer in cfg.get("peer_nodes", []):
+            name = peer.get("name")
+            base_url = peer.get("base_url", "")
+            if not name or not base_url:
+                continue
+            host = urlparse(base_url).hostname
+            if host:
+                nodes[name] = f"https://{host}:7701"
+
+    except FileNotFoundError:
+        print(f"WARNING: {_CONFIG_PATH} not found — falling back to localhost only",
+              file=sys.stderr)
+        nodes["local"] = LOCAL_URL
+    except Exception as e:
+        print(f"WARNING: could not read {_CONFIG_PATH}: {e} — falling back to localhost only",
+              file=sys.stderr)
+        nodes["local"] = LOCAL_URL
+
+    return nodes
+
+
+NODES = load_nodes()
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -186,7 +225,7 @@ def api_nodes():
 def api_submit():
     try:
         r = requests.post(
-            f"{NODES['vernex-node1']}/submit",
+            f"{LOCAL_URL}/submit",
             json=request.get_json(),
             timeout=120,
             verify=False,
@@ -200,7 +239,7 @@ def api_submit():
 def api_consent():
     try:
         r = requests.post(
-            f"{NODES['vernex-node1']}/consent",
+            f"{LOCAL_URL}/consent",
             json=request.get_json(),
             timeout=120,
             verify=False,
