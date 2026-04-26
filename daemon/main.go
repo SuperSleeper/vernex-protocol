@@ -541,6 +541,47 @@ func (rl *RateLimiter) PruneEmpty() {
 	}
 }
 
+// --- Peer Registry ---
+
+const peerLiveTTL = 90 * time.Second
+
+// PeerEntry is a node that has registered itself with this node.
+type PeerEntry struct {
+	NodeID   string    `json:"node_id"`
+	APIURL   string    `json:"api_url"`
+	LastSeen time.Time `json:"last_seen"`
+}
+
+// PeerRegistry holds in-memory heartbeat registrations from peer nodes.
+type PeerRegistry struct {
+	mu      sync.RWMutex
+	entries map[string]PeerEntry // keyed by node_id
+}
+
+func NewPeerRegistry() *PeerRegistry {
+	return &PeerRegistry{entries: make(map[string]PeerEntry)}
+}
+
+func (pr *PeerRegistry) Register(entry PeerEntry) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	pr.entries[entry.NodeID] = entry
+}
+
+// LivePeers returns all entries whose last heartbeat was within peerLiveTTL.
+func (pr *PeerRegistry) LivePeers() []PeerEntry {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	cutoff := time.Now().Add(-peerLiveTTL)
+	var out []PeerEntry
+	for _, e := range pr.entries {
+		if e.LastSeen.After(cutoff) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // rateLimitKey returns the rate-limit key for an incoming request:
 // the peer node ID for signed inter-node requests, or the source IP for unsigned local ones.
 func rateLimitKey(r *http.Request) string {
@@ -586,16 +627,17 @@ func buildTLSConfig(privKey ed25519.PrivateKey, pubKey ed25519.PublicKey, nodeID
 }
 
 type Node struct {
-	cfg         NodeConfig
-	stats       NodeStats
-	mu          sync.RWMutex
-	scheduler   *Scheduler
-	reviews     map[string]pendingReview
-	reviewsMu   sync.Mutex
-	privateKey  ed25519.PrivateKey
-	publicKey   ed25519.PublicKey
-	ollamaNodes []ollamaNode
-	rateLimiter *RateLimiter
+	cfg          NodeConfig
+	stats        NodeStats
+	mu           sync.RWMutex
+	scheduler    *Scheduler
+	reviews      map[string]pendingReview
+	reviewsMu    sync.Mutex
+	privateKey   ed25519.PrivateKey
+	publicKey    ed25519.PublicKey
+	ollamaNodes  []ollamaNode
+	rateLimiter  *RateLimiter
+	peerRegistry *PeerRegistry
 }
 
 type SubmitRequest struct {
@@ -724,13 +766,14 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 		limit = 60
 	}
 	return &Node{
-		cfg:         cfg,
-		scheduler:   NewScheduler(),
-		reviews:     make(map[string]pendingReview),
-		privateKey:  privKey,
-		publicKey:   pubKey,
-		ollamaNodes: buildOllamaNodes(cfg),
-		rateLimiter: NewRateLimiter(limit),
+		cfg:          cfg,
+		scheduler:    NewScheduler(),
+		reviews:      make(map[string]pendingReview),
+		privateKey:   privKey,
+		publicKey:    pubKey,
+		ollamaNodes:  buildOllamaNodes(cfg),
+		rateLimiter:  NewRateLimiter(limit),
+		peerRegistry: NewPeerRegistry(),
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
@@ -871,6 +914,63 @@ func takeInhibitorLock() (*os.File, error) {
 	return os.NewFile(uintptr(fd), "inhibitor"), nil
 }
 
+// outboundIP returns the local IP address used to reach peerHost.
+// Uses a UDP "dial" — no data is sent; the OS just picks the right interface.
+func outboundIP(peerHost string) string {
+	conn, err := net.Dial("udp", peerHost+":80")
+	if err != nil {
+		return "localhost"
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String()
+}
+
+// peerAPIURL derives a peer's daemon API URL from its Ollama base_url by
+// replacing the port with 7701 and switching to https.
+func peerAPIURL(peer PeerNode) (string, error) {
+	u, err := url.Parse(peer.BaseURL)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("https://%s:7701", u.Hostname()), nil
+}
+
+// registerWithPeers POSTs our node_id and api_url to each peer's /register endpoint.
+// Failures are logged but not fatal — peers will pick us up on the next heartbeat.
+func registerWithPeers(cfg NodeConfig, ownAPIPort int) {
+	for _, peer := range cfg.PeerNodes {
+		apiURL, err := peerAPIURL(peer)
+		if err != nil {
+			fmt.Printf("  [!] heartbeat: bad peer URL %q: %v\n", peer.BaseURL, err)
+			continue
+		}
+		host, err := url.Parse(peer.BaseURL)
+		if err != nil {
+			continue
+		}
+		localIP := outboundIP(host.Hostname())
+		ownURL := fmt.Sprintf("https://%s:%d", localIP, ownAPIPort)
+
+		payload, _ := json.Marshal(map[string]string{
+			"node_id": cfg.NodeID,
+			"api_url": ownURL,
+		})
+		client := &http.Client{
+			Timeout: 5 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+			},
+		}
+		resp, err := client.Post(apiURL+"/register", "application/json", bytes.NewReader(payload))
+		if err != nil {
+			fmt.Printf("  [!] heartbeat: could not reach %s (%s): %v\n", peer.Name, apiURL, err)
+			continue
+		}
+		resp.Body.Close()
+		fmt.Printf("  [✓] heartbeat: registered with %s (%s)\n", peer.Name, apiURL)
+	}
+}
+
 func main() {
 	cfg := loadConfig()
 
@@ -967,6 +1067,21 @@ func main() {
 			node.rateLimiter.PruneEmpty()
 		}
 	}()
+
+	// Register with all configured peers, then re-register every 60 seconds.
+	// This drives dynamic discovery — no hardcoded IPs needed in the dashboard.
+	if len(cfg.PeerNodes) > 0 {
+		go func() {
+			// Brief delay so our own HTTP server is ready before we hit peers.
+			time.Sleep(2 * time.Second)
+			registerWithPeers(cfg, cfg.APIPort)
+			ticker := time.NewTicker(60 * time.Second)
+			for range ticker.C {
+				registerWithPeers(cfg, cfg.APIPort)
+			}
+		}()
+		fmt.Printf("  [✓] Peer heartbeat goroutine started (%d peers)\n", len(cfg.PeerNodes))
+	}
 
 	// Start HTTP status API on port 7701
 	go func() {
@@ -1217,6 +1332,58 @@ func main() {
 				"class_2": c2,
 			})
 		})
+
+		// /register — peer heartbeat registration.
+		// Accepts {"node_id": "VRX-xxx", "api_url": "https://ip:7701"}.
+		// No signature required: registration is informational; trust is enforced at /submit.
+		http.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "POST required", http.StatusMethodNotAllowed)
+				return
+			}
+			var req struct {
+				NodeID string `json:"node_id"`
+				APIURL string `json:"api_url"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			if req.NodeID == "" || req.APIURL == "" {
+				http.Error(w, "node_id and api_url required", http.StatusBadRequest)
+				return
+			}
+			node.peerRegistry.Register(PeerEntry{
+				NodeID:   req.NodeID,
+				APIURL:   req.APIURL,
+				LastSeen: time.Now(),
+			})
+			fmt.Printf("  [↔] registered peer  id=%s  url=%s\n", req.NodeID, req.APIURL)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "node_id": node.cfg.NodeID})
+		})
+
+		// /peers — returns all peers that have sent a heartbeat within the last 90 seconds.
+		http.HandleFunc("/peers", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			peers := node.peerRegistry.LivePeers()
+			type peerOut struct {
+				NodeID         string `json:"node_id"`
+				APIURL         string `json:"api_url"`
+				LastSeenAgoSec int64  `json:"last_seen_ago_sec"`
+			}
+			out := make([]peerOut, 0, len(peers))
+			for _, p := range peers {
+				out = append(out, peerOut{
+					NodeID:         p.NodeID,
+					APIURL:         p.APIURL,
+					LastSeenAgoSec: int64(time.Since(p.LastSeen).Seconds()),
+				})
+			}
+			json.NewEncoder(w).Encode(out)
+		})
+
 		fmt.Printf("  [✓] Dashboard API (HTTPS) listening on port %d\n", node.cfg.APIPort)
 		srv := &http.Server{
 			Addr:      fmt.Sprintf(":%d", node.cfg.APIPort),

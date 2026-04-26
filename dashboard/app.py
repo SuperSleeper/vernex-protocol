@@ -2,52 +2,44 @@ from flask import Flask, render_template_string, jsonify, request, send_from_dir
 import requests
 import json
 import os
-import sys
-from urllib.parse import urlparse
+import threading
+import time
 
 app = Flask(__name__)
 
-_CONFIG_PATH = os.path.expanduser("~/vernex/config/node.json")
 LOCAL_URL = "https://localhost:7701"
+_PEERS_TTL = 5.0  # seconds between /peers refreshes
+
+_peers_lock = threading.Lock()
+_peers_cache: dict = {}
+_peers_last_fetch: float = 0.0
 
 
-def load_nodes():
-    """Build NODES dict from config/node.json.
+def get_nodes() -> dict:
+    """Return {name: api_url} for all live peers plus the local node.
 
-    Local node is always included as https://localhost:7701.
-    Peers are derived from peer_nodes[].base_url with port 7701 and https scheme.
-    Falls back to localhost-only on any config read failure.
+    Calls the local daemon's /peers endpoint and caches the result for
+    _PEERS_TTL seconds. Always includes localhost. Falls back to
+    localhost-only if the daemon is unreachable.
     """
-    nodes = {}
-    try:
-        with open(_CONFIG_PATH) as f:
-            cfg = json.load(f)
-
-        local_name = cfg.get("node_id") or "local"
-        nodes[local_name] = LOCAL_URL
-
-        for peer in cfg.get("peer_nodes", []):
-            name = peer.get("name")
-            base_url = peer.get("base_url", "")
-            if not name or not base_url:
-                continue
-            host = urlparse(base_url).hostname
-            if host:
-                nodes[name] = f"https://{host}:7701"
-
-    except FileNotFoundError:
-        print(f"WARNING: {_CONFIG_PATH} not found — falling back to localhost only",
-              file=sys.stderr)
-        nodes["local"] = LOCAL_URL
-    except Exception as e:
-        print(f"WARNING: could not read {_CONFIG_PATH}: {e} — falling back to localhost only",
-              file=sys.stderr)
-        nodes["local"] = LOCAL_URL
-
-    return nodes
-
-
-NODES = load_nodes()
+    global _peers_cache, _peers_last_fetch
+    now = time.monotonic()
+    with _peers_lock:
+        if now - _peers_last_fetch < _PEERS_TTL:
+            return dict(_peers_cache)
+        nodes = {"local": LOCAL_URL}
+        try:
+            r = requests.get(f"{LOCAL_URL}/peers", timeout=2, verify=False)
+            for entry in r.json():
+                node_id = entry.get("node_id", "")
+                api_url = entry.get("api_url", "")
+                if node_id and api_url:
+                    nodes[node_id] = api_url
+        except Exception:
+            pass
+        _peers_cache = nodes
+        _peers_last_fetch = now
+        return dict(nodes)
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -166,11 +158,12 @@ def fmt_uptime(seconds):
 
 @app.route("/")
 def index():
+    nodes_map = get_nodes()
     nodes = {}
     total_online = 0
     network_score = 0.0
 
-    for name, url in NODES.items():
+    for name, url in nodes_map.items():
         try:
             r = requests.get(f"{url}/status", timeout=2, verify=False)
             d = r.json()
@@ -193,7 +186,7 @@ def index():
         DASHBOARD_HTML,
         nodes=nodes,
         total_online=total_online,
-        total_nodes=len(NODES),
+        total_nodes=len(nodes_map),
         network_score=network_score,
     )
 
@@ -205,7 +198,7 @@ def ui():
 @app.route("/api/nodes")
 def api_nodes():
     nodes = {}
-    for name, url in NODES.items():
+    for name, url in get_nodes().items():
         try:
             r = requests.get(f"{url}/status", timeout=2, verify=False)
             d = r.json()
