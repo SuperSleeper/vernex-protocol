@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -111,6 +112,8 @@ type NodeStats struct {
 	SocialPartition   int       `json:"social_partition_pct"`
 	PersonalPartition int       `json:"personal_partition_pct"`
 	QueueDepth        int       `json:"queue_depth"`
+	IPAddress         string    `json:"ip_address"`
+	Gateway           string    `json:"gateway"`
 }
 
 // --- Token Priority Queue ---
@@ -783,6 +786,8 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 			Version:           "0.7.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
+			IPAddress:         outboundIP("8.8.8.8"),
+			Gateway:           defaultGateway(),
 		},
 	}
 }
@@ -919,10 +924,26 @@ func takeInhibitorLock() (*os.File, error) {
 func outboundIP(peerHost string) string {
 	conn, err := net.Dial("udp", peerHost+":80")
 	if err != nil {
-		return "localhost"
+		return "unknown"
 	}
 	defer conn.Close()
 	return conn.LocalAddr().(*net.UDPAddr).IP.String()
+}
+
+// defaultGateway returns the default gateway IP by parsing `ip route show default`.
+func defaultGateway() string {
+	out, err := exec.Command("ip", "route", "show", "default").Output()
+	if err != nil {
+		return "unknown"
+	}
+	// Output: "default via 192.168.1.1 dev eth0 ..."
+	fields := strings.Fields(string(out))
+	for i, f := range fields {
+		if f == "via" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return "unknown"
 }
 
 // peerAPIURL derives a peer's daemon API URL from its Ollama base_url by

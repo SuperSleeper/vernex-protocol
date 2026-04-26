@@ -69,6 +69,7 @@ DASHBOARD_HTML = """
     .stat-value.blue { color: #58a6ff; }
     .stat-value.green { color: #3fb950; }
     .stat-value.amber { color: #d29922; }
+    .stat-value.ip { font-size: 0.95rem; color: #8b949e; }
     .partition-bar { margin-top: 0.5rem; }
     .partition-label { font-size: 0.7rem; color: #8b949e; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
     .bar-track { background: #0d1117; border-radius: 4px; height: 20px; overflow: hidden; display: flex; }
@@ -119,6 +120,14 @@ DASHBOARD_HTML = """
         <div class="stat">
           <div class="stat-label">Version</div>
           <div class="stat-value version">v{{ data.version }}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">IP Address</div>
+          <div class="stat-value ip">{{ data.ip_address }}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Gateway</div>
+          <div class="stat-value ip">{{ data.gateway }}</div>
         </div>
       </div>
 
@@ -176,6 +185,8 @@ def index():
                 "version": d["version"],
                 "personal_partition_pct": d["personal_partition_pct"],
                 "social_partition_pct": d["social_partition_pct"],
+                "ip_address": d.get("ip_address", "—"),
+                "gateway": d.get("gateway", "—"),
             }
             total_online += 1
             network_score += d["contribution_score"]
