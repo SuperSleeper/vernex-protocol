@@ -32,6 +32,16 @@ DASHBOARD_SERVICE_DEST="/etc/systemd/system/vernex-dashboard.service"
 MODELS=("mistral:7b-instruct-q4_K_M" "llama3.1:8b-instruct-q4_K_M")
 VERSION="v0.7.0"
 
+# ── Bootstrap nodes ────────────────────────────────────────────────────────────
+# Add entries here as the network grows. Format: "IP:PORT" (port = API port 7701).
+# New nodes receive these as pre-configured peers and send a trust request to each.
+BOOTSTRAP_NODES=(
+  "172.17.0.132:7701"
+)
+BOOTSTRAP_PUBKEYS=(
+  "prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I="
+)
+
 # ── preflight ──────────────────────────────────────────────────────────────────
 step "Preflight checks"
 
@@ -209,19 +219,38 @@ NODE_CONFIG="${VERNEX_HOME}/config/node.json"
 if [[ -f "${NODE_CONFIG}" ]]; then
     ok "config/node.json already exists — leaving untouched"
 else
-    info "Creating default config/node.json (daemon will generate node_id on first run)"
-    cat > "${NODE_CONFIG}" <<'EOF'
+    info "Creating default config/node.json with bootstrap peers"
+
+    # Build peer_nodes JSON array from BOOTSTRAP_NODES / BOOTSTRAP_PUBKEYS
+    _PEER_JSON="["
+    _SEP=""
+    for _i in "${!BOOTSTRAP_NODES[@]}"; do
+        _HOST="${BOOTSTRAP_NODES[$_i]%%:*}"
+        _PUBKEY="${BOOTSTRAP_PUBKEYS[$_i]:-}"
+        _IDX=$((_i + 1))
+        _PEER_JSON+="${_SEP}
+    {\"name\": \"bootstrap-${_IDX}\", \"base_url\": \"http://${_HOST}:11434\", \"public_key\": \"${_PUBKEY}\"}"
+        _SEP=","
+    done
+    _PEER_JSON+="
+  ]"
+
+    cat > "${NODE_CONFIG}" <<JSONEOF
 {
   "node_id": "",
   "p2p_port": 7700,
   "api_port": 7701,
   "personal_partition": 70,
   "social_partition": 30,
-  "peer_nodes": []
+  "peer_nodes": ${_PEER_JSON}
 }
-EOF
+JSONEOF
     chmod 600 "${NODE_CONFIG}"
-    ok "Default config/node.json created"
+    if [[ ${#BOOTSTRAP_NODES[@]} -gt 0 ]]; then
+        ok "Default config/node.json created with ${#BOOTSTRAP_NODES[@]} bootstrap peer(s)"
+    else
+        ok "Default config/node.json created (no bootstrap peers configured)"
+    fi
 fi
 
 # ── Build daemon ───────────────────────────────────────────────────────────────
@@ -350,6 +379,48 @@ if [[ -f "${VERNEX_HOME}/config/node.pub" ]]; then
     PUB_KEY="$(cat "${VERNEX_HOME}/config/node.pub")"
 fi
 
+# ── Bootstrap trust registration ──────────────────────────────────────────────
+step "Bootstrap trust registration"
+
+if [[ ${#BOOTSTRAP_NODES[@]} -eq 0 ]]; then
+    info "No bootstrap nodes configured — skipping"
+elif [[ "${NODE_ID}" == "(not yet generated)" ]]; then
+    warn "Node ID not yet available — skipping trust request (re-run after daemon starts)"
+else
+    # Determine our outbound IP toward the first bootstrap host
+    _FIRST_HOST="${BOOTSTRAP_NODES[0]%%:*}"
+    MY_IP="$(python3 -c "
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    s.connect(('${_FIRST_HOST}', 80))
+    print(s.getsockname()[0])
+except Exception:
+    print('localhost')
+finally:
+    s.close()
+" 2>/dev/null || echo 'localhost')"
+
+    PUB_KEY_CLEAN="${PUB_KEY%$'\n'}"   # strip trailing newline from node.pub
+
+    for _BOOTSTRAP in "${BOOTSTRAP_NODES[@]}"; do
+        info "Sending trust request to https://${_BOOTSTRAP}"
+        _RESULT="$(curl -sk --connect-timeout 5 -w '\n%{http_code}' \
+            -X POST "https://${_BOOTSTRAP}/trust-request" \
+            -H "Content-Type: application/json" \
+            -d "{\"node_id\": \"${NODE_ID}\", \"public_key\": \"${PUB_KEY_CLEAN}\", \"api_url\": \"https://${MY_IP}:7701\"}" \
+            2>/dev/null || echo 'curl_failed')"
+        if echo "${_RESULT}" | grep -q '"status"'; then
+            ok "Trust request sent — awaiting operator approval at https://${_BOOTSTRAP}"
+        else
+            warn "Bootstrap ${_BOOTSTRAP} unreachable — trust request not sent"
+            warn "Retry manually: curl -sk -X POST https://${_BOOTSTRAP}/trust-request \\"
+            warn "  -H 'Content-Type: application/json' \\"
+            warn "  -d '{\"node_id\":\"${NODE_ID}\",\"public_key\":\"${PUB_KEY_CLEAN}\",\"api_url\":\"https://${MY_IP}:7701\"}'"
+        fi
+    done
+fi
+
 # ── Final status ───────────────────────────────────────────────────────────────
 echo
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════╗${RESET}"
@@ -376,6 +447,6 @@ echo
 if [[ "${GPU_TYPE}" == "nvidia" ]]; then
     warn "If NVIDIA drivers were just installed, a reboot may be required before Ollama uses the GPU."
 fi
-echo -e "${CYAN}To add a peer node, edit ~/vernex/config/node.json and add an entry to peer_nodes[].${RESET}"
-echo -e "${CYAN}See CLAUDE.md → 'Adding a peer node' for the exact steps.${RESET}"
+echo -e "${CYAN}Bootstrap trust request sent — approve via the operator's dashboard (http://localhost:5000).${RESET}"
+echo -e "${CYAN}To add more peers manually, edit ~/vernex/config/node.json → peer_nodes[].${RESET}"
 echo

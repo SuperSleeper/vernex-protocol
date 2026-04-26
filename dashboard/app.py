@@ -92,6 +92,19 @@ DASHBOARD_HTML = """
     /* ── Footer ── */
     .footer { margin-top: 2rem; color: #8b949e; font-size: 0.75rem; text-align: center; }
     .version { color: #8b949e; font-size: 0.75rem; }
+    /* ── Trust requests ── */
+    .trust-banner { background: #2a1f00; border: 1px solid #d29922; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; }
+    .trust-banner-title { color: #d29922; font-weight: bold; font-size: 0.85rem; margin-bottom: 0.75rem; letter-spacing: 1px; }
+    .trust-item { display: flex; justify-content: space-between; align-items: center; background: #1a1500; border: 1px solid #3d2e00; border-radius: 6px; padding: 0.65rem 0.9rem; margin-top: 0.5rem; gap: 1rem; }
+    .trust-info { display: flex; align-items: baseline; gap: 1.2rem; flex-wrap: wrap; min-width: 0; }
+    .trust-nodeid { color: #e6edf3; font-weight: bold; font-size: 0.8rem; }
+    .trust-key { color: #8b949e; font-size: 0.72rem; font-family: 'Courier New', monospace; }
+    .trust-meta { color: #8b949e; font-size: 0.72rem; }
+    .trust-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+    .btn-approve { background: #1a4a1f; border: 1px solid #3fb950; color: #3fb950; font-family: 'Courier New', monospace; font-size: 0.72rem; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-weight: bold; letter-spacing: 1px; }
+    .btn-approve:hover { background: #3fb950; color: #0d1117; }
+    .btn-deny { background: #3d1a1a; border: 1px solid #f85149; color: #f85149; font-family: 'Courier New', monospace; font-size: 0.72rem; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-weight: bold; letter-spacing: 1px; }
+    .btn-deny:hover { background: #f85149; color: #0d1117; }
   </style>
 </head>
 <body>
@@ -105,6 +118,28 @@ DASHBOARD_HTML = """
       <button class="toggle-btn" id="toggle-btn" onclick="toggleMode()">[COMPACT]</button>
     </div>
   </div>
+
+  <!-- Trust request banner (hidden when empty) -->
+  {% if trust_requests %}
+  <div class="trust-banner">
+    <div class="trust-banner-title">⚠ {{ trust_requests|length }} NODE(S) REQUESTING TO JOIN</div>
+    {% for tr in trust_requests %}
+    <div class="trust-item" id="tr-{{ tr.node_id }}">
+      <div class="trust-info">
+        <span class="trust-nodeid">{{ tr.node_id }}</span>
+        <span class="trust-key">{{ tr.public_key[:28] }}…</span>
+        <span class="trust-meta">from {{ tr.source_ip }}</span>
+        <span class="trust-meta">{{ tr.requested_at[:19] }}</span>
+        <span class="trust-meta" style="color:#58a6ff;">{{ tr.api_url }}</span>
+      </div>
+      <div class="trust-actions">
+        <button class="btn-approve" onclick="approveTrust('{{ tr.node_id }}')">APPROVE</button>
+        <button class="btn-deny" onclick="denyTrust('{{ tr.node_id }}')">DENY</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 
   <!-- Cards view (default) -->
   <div class="grid" id="cards-view">
@@ -229,6 +264,25 @@ DASHBOARD_HTML = """
       applyMode(next);
     }
     applyMode(localStorage.getItem('vernex-view') || 'cards');
+
+    function approveTrust(nodeId) {
+      var row = document.getElementById('tr-' + nodeId);
+      if (row) { row.style.opacity = '0.4'; row.style.pointerEvents = 'none'; }
+      fetch('/api/trust-approve', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({node_id: nodeId})
+      }).then(function() { location.reload(); });
+    }
+    function denyTrust(nodeId) {
+      var row = document.getElementById('tr-' + nodeId);
+      if (row) { row.style.opacity = '0.4'; row.style.pointerEvents = 'none'; }
+      fetch('/api/trust-deny', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({node_id: nodeId})
+      }).then(function() { location.reload(); });
+    }
   </script>
 </body>
 </html>
@@ -272,12 +326,20 @@ def index():
         except Exception:
             nodes[name] = {"online": False}
 
+    trust_requests = []
+    try:
+        tr = requests.get(f"{LOCAL_URL}/trust-requests", timeout=2, verify=False)
+        trust_requests = tr.json() or []
+    except Exception:
+        pass
+
     return render_template_string(
         DASHBOARD_HTML,
         nodes=nodes,
         total_online=total_online,
         total_nodes=len(nodes_map),
         network_score=network_score,
+        trust_requests=trust_requests,
     )
 
 @app.route("/ui")
@@ -325,6 +387,43 @@ def api_consent():
             f"{LOCAL_URL}/consent",
             json=request.get_json(),
             timeout=120,
+            verify=False,
+        )
+        return r.content, r.status_code, {"Content-Type": "application/json"}
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+
+@app.route("/api/trust-requests")
+def api_trust_requests():
+    try:
+        r = requests.get(f"{LOCAL_URL}/trust-requests", timeout=2, verify=False)
+        return r.content, r.status_code, {"Content-Type": "application/json"}
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+
+@app.route("/api/trust-approve", methods=["POST"])
+def api_trust_approve():
+    try:
+        r = requests.post(
+            f"{LOCAL_URL}/trust-approve",
+            json=request.get_json(),
+            timeout=5,
+            verify=False,
+        )
+        return r.content, r.status_code, {"Content-Type": "application/json"}
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+
+@app.route("/api/trust-deny", methods=["POST"])
+def api_trust_deny():
+    try:
+        r = requests.post(
+            f"{LOCAL_URL}/trust-deny",
+            json=request.get_json(),
+            timeout=5,
             verify=False,
         )
         return r.content, r.status_code, {"Content-Type": "application/json"}

@@ -488,13 +488,15 @@ func loadOrGenerateKeypair(configDir string) (ed25519.PrivateKey, ed25519.Public
 type RateLimiter struct {
 	mu      sync.Mutex
 	buckets map[string][]time.Time
-	limit   int // max requests per 60-second window
+	limit   int
+	window  time.Duration
 }
 
-func NewRateLimiter(limit int) *RateLimiter {
+func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	return &RateLimiter{
 		buckets: make(map[string][]time.Time),
 		limit:   limit,
+		window:  window,
 	}
 }
 
@@ -504,10 +506,9 @@ func (rl *RateLimiter) Allow(key string) bool {
 	defer rl.mu.Unlock()
 
 	now := time.Now()
-	cutoff := now.Add(-60 * time.Second)
+	cutoff := now.Add(-rl.window)
 
 	bucket := rl.buckets[key]
-	// Prune timestamps outside the sliding window
 	valid := bucket[:0]
 	for _, t := range bucket {
 		if t.After(cutoff) {
@@ -522,12 +523,12 @@ func (rl *RateLimiter) Allow(key string) bool {
 	return true
 }
 
-// PruneEmpty removes buckets that have no timestamps in the last 60 seconds.
+// PruneEmpty removes buckets with no activity within the window.
 // Called periodically to prevent unbounded memory growth from stale keys.
 func (rl *RateLimiter) PruneEmpty() {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	cutoff := time.Now().Add(-60 * time.Second)
+	cutoff := time.Now().Add(-rl.window)
 	for key, bucket := range rl.buckets {
 		active := false
 		for _, t := range bucket {
@@ -627,19 +628,31 @@ func buildTLSConfig(privKey ed25519.PrivateKey, pubKey ed25519.PublicKey, nodeID
 	}, nil
 }
 
+// TrustRequest is an inbound request from a new node asking to join the trusted peer list.
+type TrustRequest struct {
+	NodeID      string    `json:"node_id"`
+	PublicKey   string    `json:"public_key"`
+	APIUrl      string    `json:"api_url"`
+	RequestedAt time.Time `json:"requested_at"`
+	SourceIP    string    `json:"source_ip"`
+}
+
 type Node struct {
-	cfg            NodeConfig
-	stats          NodeStats
-	mu             sync.RWMutex
-	scheduler      *Scheduler
-	reviews        map[string]pendingReview
-	reviewsMu      sync.Mutex
-	privateKey     ed25519.PrivateKey
-	publicKey      ed25519.PublicKey
-	ollamaNodes    []ollamaNode
-	rateLimiter    *RateLimiter
-	peerRegistry   *PeerRegistry
-	cachedPublicIP atomic.Value // string; refreshed every 10 min by a background goroutine
+	cfg              NodeConfig
+	stats            NodeStats
+	mu               sync.RWMutex
+	scheduler        *Scheduler
+	reviews          map[string]pendingReview
+	reviewsMu        sync.Mutex
+	privateKey       ed25519.PrivateKey
+	publicKey        ed25519.PublicKey
+	ollamaNodes      []ollamaNode
+	rateLimiter      *RateLimiter
+	peerRegistry     *PeerRegistry
+	cachedPublicIP   atomic.Value // string; refreshed every 10 min by a background goroutine
+	trustRequests    []TrustRequest
+	trustMu          sync.Mutex
+	trustRateLimiter *RateLimiter // 3 requests per IP per hour
 }
 
 // statusResponse is the /status payload. It embeds the static NodeStats fields
@@ -783,9 +796,10 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 		reviews:      make(map[string]pendingReview),
 		privateKey:   privKey,
 		publicKey:    pubKey,
-		ollamaNodes:  buildOllamaNodes(cfg),
-		rateLimiter:  NewRateLimiter(limit),
-		peerRegistry: NewPeerRegistry(),
+		ollamaNodes:      buildOllamaNodes(cfg),
+		rateLimiter:      NewRateLimiter(limit, 60*time.Second),
+		peerRegistry:     NewPeerRegistry(),
+		trustRateLimiter: NewRateLimiter(3, 60*time.Minute),
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
@@ -1019,6 +1033,39 @@ func registerWithPeers(cfg NodeConfig, ownAPIPort int) {
 		resp.Body.Close()
 		fmt.Printf("  [✓] heartbeat: registered with %s (%s)\n", peer.Name, apiURL)
 	}
+}
+
+// isLocalhost returns true only if the request came from 127.0.0.1 or ::1.
+func isLocalhost(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	return host == "127.0.0.1" || host == "::1"
+}
+
+// saveConfig writes cfg to ~/vernex/config/node.json.
+func saveConfig(cfg NodeConfig) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(home, "vernex", "config", "node.json")
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0644)
+}
+
+// deriveOllamaURL converts a Vernex API URL (https://IP:7701) to the
+// corresponding Ollama endpoint (http://IP:11434).
+func deriveOllamaURL(apiURL string) string {
+	u, err := url.Parse(apiURL)
+	if err != nil {
+		return "http://localhost:11434"
+	}
+	return fmt.Sprintf("http://%s:11434", u.Hostname())
 }
 
 func main() {
@@ -1448,6 +1495,162 @@ func main() {
 				})
 			}
 			json.NewEncoder(w).Encode(out)
+		})
+
+		// /trust-request — any node can POST to request joining the trusted peer list.
+		// Rate limited to 3 requests per IP per hour. No auth required.
+		http.HandleFunc("/trust-request", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "POST required", http.StatusMethodNotAllowed)
+				return
+			}
+			srcHost, _, _ := net.SplitHostPort(r.RemoteAddr)
+			if !node.trustRateLimiter.Allow(srcHost) {
+				http.Error(w, "rate limit exceeded (3/hour per IP)", http.StatusTooManyRequests)
+				return
+			}
+			var req struct {
+				NodeID    string `json:"node_id"`
+				PublicKey string `json:"public_key"`
+				APIUrl    string `json:"api_url"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			if req.NodeID == "" || req.PublicKey == "" || req.APIUrl == "" {
+				http.Error(w, "node_id, public_key, and api_url required", http.StatusBadRequest)
+				return
+			}
+			entry := TrustRequest{
+				NodeID:      req.NodeID,
+				PublicKey:   req.PublicKey,
+				APIUrl:      req.APIUrl,
+				RequestedAt: time.Now(),
+				SourceIP:    srcHost,
+			}
+			node.trustMu.Lock()
+			// Upsert: replace existing entry for the same node_id
+			replaced := false
+			for i := range node.trustRequests {
+				if node.trustRequests[i].NodeID == req.NodeID {
+					node.trustRequests[i] = entry
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				node.trustRequests = append(node.trustRequests, entry)
+			}
+			node.trustMu.Unlock()
+			fmt.Printf("  [↑] trust request  id=%s  src=%s\n", req.NodeID, srcHost)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "pending", "message": "trust request received — awaiting operator approval"})
+		})
+
+		// /trust-requests — localhost only — returns pending trust requests.
+		http.HandleFunc("/trust-requests", func(w http.ResponseWriter, r *http.Request) {
+			if !isLocalhost(r) {
+				http.Error(w, "localhost only", http.StatusForbidden)
+				return
+			}
+			node.trustMu.Lock()
+			out := make([]TrustRequest, len(node.trustRequests))
+			copy(out, node.trustRequests)
+			node.trustMu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			json.NewEncoder(w).Encode(out)
+		})
+
+		// /trust-approve — localhost only — adds node to cfg.PeerNodes and saves config.
+		http.HandleFunc("/trust-approve", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "POST required", http.StatusMethodNotAllowed)
+				return
+			}
+			if !isLocalhost(r) {
+				http.Error(w, "localhost only", http.StatusForbidden)
+				return
+			}
+			var req struct {
+				NodeID string `json:"node_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			node.trustMu.Lock()
+			var found *TrustRequest
+			filtered := node.trustRequests[:0]
+			for i := range node.trustRequests {
+				if node.trustRequests[i].NodeID == req.NodeID {
+					tr := node.trustRequests[i]
+					found = &tr
+				} else {
+					filtered = append(filtered, node.trustRequests[i])
+				}
+			}
+			node.trustRequests = filtered
+			node.trustMu.Unlock()
+			if found == nil {
+				http.Error(w, "trust request not found", http.StatusNotFound)
+				return
+			}
+			newPeer := PeerNode{
+				Name:      found.NodeID,
+				BaseURL:   deriveOllamaURL(found.APIUrl),
+				PublicKey: found.PublicKey,
+			}
+			node.mu.Lock()
+			node.cfg.PeerNodes = append(node.cfg.PeerNodes, newPeer)
+			node.ollamaNodes = buildOllamaNodes(node.cfg)
+			cfgSnap := node.cfg
+			node.mu.Unlock()
+			if err := saveConfig(cfgSnap); err != nil {
+				fmt.Printf("  [!] trust-approve: save config failed: %v\n", err)
+			}
+			fmt.Printf("  [✓] trust approved  id=%s  url=%s\n", found.NodeID, found.APIUrl)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "approved", "node_id": found.NodeID})
+		})
+
+		// /trust-deny — localhost only — removes from queue without adding to peers.
+		http.HandleFunc("/trust-deny", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "POST required", http.StatusMethodNotAllowed)
+				return
+			}
+			if !isLocalhost(r) {
+				http.Error(w, "localhost only", http.StatusForbidden)
+				return
+			}
+			var req struct {
+				NodeID string `json:"node_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			node.trustMu.Lock()
+			filtered := node.trustRequests[:0]
+			found := false
+			for i := range node.trustRequests {
+				if node.trustRequests[i].NodeID == req.NodeID {
+					found = true
+				} else {
+					filtered = append(filtered, node.trustRequests[i])
+				}
+			}
+			node.trustRequests = filtered
+			node.trustMu.Unlock()
+			if !found {
+				http.Error(w, "trust request not found", http.StatusNotFound)
+				return
+			}
+			fmt.Printf("  [✗] trust denied  id=%s\n", req.NodeID)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "denied", "node_id": req.NodeID})
 		})
 
 		fmt.Printf("  [✓] Dashboard API (HTTPS) listening on port %d\n", node.cfg.APIPort)
