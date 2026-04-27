@@ -52,6 +52,7 @@ type NodeConfig struct {
 	APIPort              int        `json:"api_port"`
 	DashboardPort        int        `json:"dashboard_port"`
 	RateLimitPerMin      int        `json:"rate_limit_per_min"`
+	BraveAPIKey          string     `json:"brave_api_key,omitempty"` // Brave Search API key; omitted from config if empty
 	PeerNodes            []PeerNode `json:"peer_nodes,omitempty"`
 }
 
@@ -770,61 +771,61 @@ func buildPromptWithContext(ctx []ContextTurn, prompt string) string {
 	return sb.String()
 }
 
-// ddgResponse holds the fields we use from the DuckDuckGo Instant Answers API.
-type ddgResponse struct {
-	AbstractText  string `json:"AbstractText"`
-	Answer        string `json:"Answer"`
-	RelatedTopics []struct {
-		Text string `json:"Text"` // category grouping entries have no Text; they're skipped
-	} `json:"RelatedTopics"`
+// braveSearchResponse holds the fields we use from the Brave Search API.
+type braveSearchResponse struct {
+	Web struct {
+		Results []struct {
+			Title       string `json:"title"`
+			URL         string `json:"url"`
+			Description string `json:"description"`
+		} `json:"results"`
+	} `json:"web"`
 }
 
-// searchWeb queries the DuckDuckGo Instant Answers API (no key required) and returns
-// a compact formatted string suitable for prepending to a prompt.
-func searchWeb(query string) (string, error) {
-	endpoint := "https://api.duckduckgo.com/?q=" + url.QueryEscape(query) + "&format=json&no_html=1&skip_disambig=1"
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(endpoint)
+// searchWeb queries the Brave Search API and returns a compact formatted string
+// suitable for prepending to a prompt. Falls back gracefully when apiKey is empty.
+func searchWeb(query, apiKey string) (string, error) {
+	if apiKey == "" {
+		return "", fmt.Errorf("Brave API key not configured")
+	}
+	endpoint := "https://api.search.brave.com/res/v1/web/search?q=" + url.QueryEscape(query) + "&count=5"
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", fmt.Errorf("DDG request failed: %w", err)
+		return "", fmt.Errorf("building Brave request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Subscription-Token", apiKey)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Brave request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	var ddg ddgResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ddg); err != nil {
-		return "", fmt.Errorf("DDG parse error: %w", err)
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("Brave API returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var brave braveSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&brave); err != nil {
+		return "", fmt.Errorf("Brave parse error: %w", err)
+	}
+	if len(brave.Web.Results) == 0 {
+		return "", fmt.Errorf("Brave returned no results for %q", query)
 	}
 
 	var sb strings.Builder
 	sb.WriteString("[Web results for: " + query + "]\n")
-
-	if ddg.Answer != "" {
-		sb.WriteString("Answer: " + ddg.Answer + "\n")
-	}
-	if ddg.AbstractText != "" {
-		sb.WriteString("Summary: " + ddg.AbstractText + "\n")
-	}
-
-	count := 0
-	for _, t := range ddg.RelatedTopics {
-		if t.Text == "" {
-			continue // skip category-grouping entries
-		}
-		sb.WriteString("Related: " + t.Text + "\n")
-		count++
-		if count == 3 {
-			break
-		}
-	}
-
-	if ddg.Answer == "" && ddg.AbstractText == "" && count == 0 {
-		return "", fmt.Errorf("DDG returned no usable results for %q", query)
+	for i, r := range brave.Web.Results {
+		sb.WriteString(fmt.Sprintf("%d. %s\n   URL: %s\n   %s\n", i+1, r.Title, r.URL, r.Description))
 	}
 	return sb.String(), nil
 }
 
 // needsWebSearch checks the prompt for keywords that signal a need for live/current data.
-// Returns (true, query) when detected; query is the prompt itself since DDG handles
+// Returns (true, query) when detected; query is the prompt itself since Brave handles
 // natural language well.
 func needsWebSearch(prompt string) (bool, string) {
 	lower := strings.ToLower(prompt)
@@ -1384,7 +1385,7 @@ func main() {
 			searchQuery := ""
 			augmentedPrompt := incoming.Prompt
 			if detected, query := needsWebSearch(incoming.Prompt); detected {
-				if results, serr := searchWeb(query); serr == nil {
+				if results, serr := searchWeb(query, node.cfg.BraveAPIKey); serr == nil {
 					augmentedPrompt = results + "\n" + incoming.Prompt
 					webSearched = true
 					searchQuery = query

@@ -1,7 +1,7 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-April 26, 2026 (session 3)
+April 26, 2026 (session 4)
 
 ## Current Version
 v0.8.0
@@ -13,6 +13,15 @@ v0.8.0
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
 
 ## What Was Just Completed
+- Brave Search API replacing DDG Instant Answers — live web results injected into LLM context
+- brave_api_key field added to NodeConfig (omitempty, loaded from config/node.json, gitignored)
+- braveSearchResponse struct parses web.results[].title/url/description from Brave API
+- searchWeb(query, apiKey) — GET api.search.brave.com with Accept + X-Subscription-Token headers, count=5
+- Graceful fallback: empty key or any request failure → answer without web context (logs warning)
+- needsWebSearch intent detection unchanged; comment updated to reference Brave
+- Tested: web_searched=true with live AI news results; non-search prompts correctly skip Brave
+
+## Previously Completed
 - ML-DSA 44 (CRYSTALS-Dilithium, NIST FIPS 204) hybrid post-quantum crypto upgrade
 - Both nodes now generate ed25519 + ML-DSA 44 keypairs at startup
 - New key files: config/node.mldsa.key (2560B, mode 0600), config/node.mldsa.pub (base64, shareable)
@@ -36,8 +45,7 @@ v0.8.0
 ## Immediate Next Steps (in priority order)
 1. Deploy v0.8.0 to Node-2: git pull, go build, restart daemon — Node-2 generates its own ML-DSA keypair
 2. Exchange ML-DSA public keys: copy node.mldsa.pub from each node into the other's peer_nodes[].mldsa_public_key in config — activates hybrid enforcement
-3. Brave Search API — live web results replacing DDG Instant Answers
-4. Distributed CA — threshold-signed, no single point of failure (ML-DSA certs in X.509)
+3. Distributed CA — threshold-signed, no single point of failure (ML-DSA certs in X.509)
 5. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
 6. Rename "Social" → "Compute Donation" in dashboard and daemon
 7. Version string auto-detection from source instead of hardcoded
