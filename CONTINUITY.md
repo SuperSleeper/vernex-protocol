@@ -1,10 +1,10 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-April 27, 2026 (session 5)
+April 27, 2026 (session 6)
 
 ## Current Version
-v0.8.0
+v0.9.0
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -13,16 +13,22 @@ v0.8.0
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
 
 ## What Was Just Completed
-- STUN endpoint discovery — Phase 1 of Vernex P2P (v0.8.1)
-- /stun endpoint: returns caller's external IP:port as seen through NAT, no auth required
-- discoverExternalEndpoint(): calls /stun on each bootstrap peer at startup, stores result in node.externalIP / node.externalPort (atomic)
-- PeerEntry extended: ExternalIP + ExternalPort recorded when peers register
-- /register handler: accepts external_ip + external_port in heartbeat payload
-- /peers response: includes external_ip + external_port per peer
-- /status response: includes external_ip + external_port for own node
-- registerWithPeers: includes own external endpoint in every heartbeat POST
-- Dashboard: External IP stat in card view + compact table column
-- Startup log: [✓] External endpoint: x.x.x.x:port (or [!] unknown if no peer responded)
+- UDP hole punching — Phase 2 of Vernex P2P (v0.9.0)
+- peerHoles map + peerHolesMu + udpConn added to Node struct
+- UDP listener on port 7700 (coexists with TCP): records confirmed direct connections when VERNEX-PUNCH packet received
+- connectionType(peer): "local" (RFC1918 API URL), "direct" (UDP packet received), "relayed" (default)
+- sendHolePunchPackets(): sends 5 VERNEX-PUNCH datagrams at 50ms spacing
+- initiatePunch(): signals peer via /punch-signal + sends packets simultaneously
+- Auto-punch goroutine: 15s delay, then every 5 min, punches toward RELAYED peers with known external endpoint
+- /punch-request endpoint: bootstrap receives coordinated punch request, looks up both peers, signals each
+- /punch-signal endpoint: node receives instruction to punch toward IP:port
+- isPrivateIP(): RFC1918 CIDR check for same-LAN detection
+- signalPunch(): HTTPS POST helper to /punch-signal on peer
+- PeerRegistry.GetByNodeID(): lookup by node ID for /punch-request
+- /status: now includes direct_peers + local_peers counts
+- /peers: each entry now includes connection_type
+- Dashboard: CONNECTION stat card + compact table column (green=direct, blue=local, amber=relayed)
+- Version bumped to v0.9.0
 
 ## Previously Completed
 - Brave Search API replacing DDG Instant Answers — live web results injected into LLM context
@@ -55,14 +61,14 @@ v0.8.0
 - InsecureSkipVerify TEMPORARY — pending distributed CA (replaces after ML-DSA CA phase)
 
 ## Immediate Next Steps (in priority order)
-1. Deploy v0.8.1 to Node-2: git pull, go build, restart daemon
+1. Deploy v0.9.0 to Node-2: git pull, go build, restart daemon
 2. Verify /stun returns correct external IPs on both nodes
 3. Exchange ML-DSA public keys: copy node.mldsa.pub from each node into the other's peer_nodes[].mldsa_public_key in config — activates hybrid enforcement
-4. Phase 2 P2P — UDP hole punching: use STUN-discovered endpoints to initiate direct peer connections
+4. Test hole punching: watch for [✓] UDP hole punched in daemon logs after both nodes restart
 5. Distributed CA — threshold-signed, no single point of failure (ML-DSA certs in X.509)
-5. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
-6. Rename "Social" → "Compute Donation" in dashboard and daemon
-7. Version string auto-detection from source instead of hardcoded
+6. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
+7. Rename "Social" → "Compute Donation" in dashboard and daemon
+8. Version string auto-detection from source instead of hardcoded
 
 ## Design Constraints (never violate)
 - All cryptography must become post-quantum resistant (ML-DSA + ML-KEM, NIST FIPS 203/204)
@@ -132,4 +138,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.8.0. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. ML-DSA enforcement is per-peer opt-in (add mldsa_public_key to peer config to activate). Next: deploy v0.8.0 on Node-2, exchange ML-DSA public keys, activate hybrid enforcement. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*
+*Vernex Protocol v0.9.0. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. ML-DSA enforcement is per-peer opt-in (add mldsa_public_key to peer config to activate). Phase 1 (STUN) + Phase 2 (UDP hole punching) complete. connection_type in /peers and /status. Next: deploy v0.9.0 on Node-2, verify hole punch logs. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*

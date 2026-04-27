@@ -16,7 +16,7 @@ _peers_last_fetch: float = 0.0
 
 
 def get_nodes() -> dict:
-    """Return {name: api_url} for all live peers plus the local node.
+    """Return {name: {"url": api_url, "connection_type": str}} for all live peers plus local.
 
     Calls the local daemon's /peers endpoint and caches the result for
     _PEERS_TTL seconds. Always includes localhost. Falls back to
@@ -27,14 +27,15 @@ def get_nodes() -> dict:
     with _peers_lock:
         if now - _peers_last_fetch < _PEERS_TTL:
             return dict(_peers_cache)
-        nodes = {"local": LOCAL_URL}
+        nodes = {"local": {"url": LOCAL_URL, "connection_type": "local"}}
         try:
             r = requests.get(f"{LOCAL_URL}/peers", timeout=2, verify=False)
             for entry in r.json():
                 node_id = entry.get("node_id", "")
                 api_url = entry.get("api_url", "")
+                conn_type = entry.get("connection_type", "relayed")
                 if node_id and api_url:
-                    nodes[node_id] = api_url
+                    nodes[node_id] = {"url": api_url, "connection_type": conn_type}
         except Exception:
             pass
         _peers_cache = nodes
@@ -170,6 +171,10 @@ DASHBOARD_HTML = """
           <div class="stat-label">External IP</div>
           <div class="stat-value ip">{{ data.external_ip }}</div>
         </div>
+        <div class="stat">
+          <div class="stat-label">Connection</div>
+          <div class="stat-value {% if data.connection_type == 'direct' %}green{% elif data.connection_type == 'local' %}blue{% else %}amber{% endif %}">{{ data.connection_type | upper }}</div>
+        </div>
       </div>
 
       <div class="partition-bar">
@@ -212,6 +217,7 @@ DASHBOARD_HTML = """
           <th>IP</th>
           <th>Public IP</th>
           <th>External IP</th>
+          <th>Connection</th>
           <th>Uptime</th>
           <th>Score</th>
           <th>Version</th>
@@ -236,6 +242,7 @@ DASHBOARD_HTML = """
           <td style="color:#8b949e;">{{ data.ip_address if data.online else '—' }}</td>
           <td style="color:#8b949e;">{{ data.public_ip if data.online else '—' }}</td>
           <td style="color:#8b949e;">{{ data.external_ip if data.online else '—' }}</td>
+          <td style="color:{% if data.online %}{% if data.connection_type == 'direct' %}#3fb950{% elif data.connection_type == 'local' %}#58a6ff{% else %}#d29922{% endif %}{% else %}#8b949e{% endif %}; font-weight:bold;">{{ data.connection_type | upper if data.online else '—' }}</td>
           <td style="color:#58a6ff;">{{ data.uptime if data.online else '—' }}</td>
           <td style="color:#3fb950;">{{ "%.1f"|format(data.contribution_score) if data.online else '—' }}</td>
           <td style="color:#8b949e;">{{ 'v' + data.version if data.online else '—' }}</td>
@@ -324,7 +331,9 @@ def index():
     total_online = 0
     network_score = 0.0
 
-    for name, url in nodes_map.items():
+    for name, node_info in nodes_map.items():
+        url = node_info["url"] if isinstance(node_info, dict) else node_info
+        conn_type = node_info.get("connection_type", "relayed") if isinstance(node_info, dict) else "local"
         try:
             r = requests.get(f"{url}/status", timeout=2, verify=False)
             d = r.json()
@@ -340,6 +349,7 @@ def index():
                 "ip_address": d.get("ip_address", "—"),
                 "public_ip": d.get("public_ip", "—"),
                 "external_ip": d.get("external_ip", "—"),
+                "connection_type": conn_type,
             }
             total_online += 1
             network_score += d["contribution_score"]
@@ -370,7 +380,8 @@ def ui():
 @app.route("/api/nodes")
 def api_nodes():
     nodes = {}
-    for name, url in get_nodes().items():
+    for name, node_info in get_nodes().items():
+        url = node_info["url"] if isinstance(node_info, dict) else node_info
         try:
             r = requests.get(f"{url}/status", timeout=2, verify=False)
             d = r.json()

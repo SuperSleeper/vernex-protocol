@@ -626,6 +626,14 @@ func (pr *PeerRegistry) Register(entry PeerEntry) {
 	pr.entries[entry.NodeID] = entry
 }
 
+// GetByNodeID returns the registry entry for a specific node ID.
+func (pr *PeerRegistry) GetByNodeID(nodeID string) (PeerEntry, bool) {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	e, ok := pr.entries[nodeID]
+	return e, ok
+}
+
 // LivePeers returns all entries whose last heartbeat was within peerLiveTTL.
 func (pr *PeerRegistry) LivePeers() []PeerEntry {
 	pr.mu.RLock()
@@ -713,7 +721,10 @@ type Node struct {
 	externalPort     atomic.Int32 // own external port as seen by bootstrap peers via /stun
 	trustRequests    []TrustRequest
 	trustMu          sync.Mutex
-	trustRateLimiter *RateLimiter // 3 requests per IP per hour
+	trustRateLimiter *RateLimiter    // 3 requests per IP per hour
+	peerHoles        map[string]*net.UDPAddr // keyed by node_id; set when UDP punch packet received
+	peerHolesMu      sync.RWMutex
+	udpConn          *net.UDPConn // single UDP socket on daemonPort for hole punching
 }
 
 // statusResponse is the /status payload. It embeds the static NodeStats fields
@@ -726,6 +737,8 @@ type statusResponse struct {
 	PublicIP     string `json:"public_ip"`
 	ExternalIP   string `json:"external_ip,omitempty"`
 	ExternalPort int    `json:"external_port,omitempty"`
+	DirectPeers  int    `json:"direct_peers"`
+	LocalPeers   int    `json:"local_peers"`
 }
 
 type SubmitRequest struct {
@@ -865,13 +878,14 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 		rateLimiter:      NewRateLimiter(limit, 60*time.Second),
 		peerRegistry:     NewPeerRegistry(),
 		trustRateLimiter: NewRateLimiter(3, 60*time.Minute),
+		peerHoles:        make(map[string]*net.UDPAddr),
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.8.1",
+			Version:           "0.9.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -901,7 +915,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.8.1  — Patent Pending       ║")
+	fmt.Println("║       v0.9.0  — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Ed25519   : %s\n", base64.StdEncoding.EncodeToString(n.publicKey))
@@ -918,6 +932,51 @@ func (n *Node) printBanner() {
 	fmt.Printf("  Started   : %s\n", s.StartedAt.Format("2006-01-02 15:04:05"))
 	fmt.Printf("  Partition : %d%% personal / %d%% social\n\n",
 		s.PersonalPartition, s.SocialPartition)
+}
+
+// connectionType returns "local", "direct", or "relayed" for a registered peer.
+// "local"   — peer API URL resolves to a private/loopback address (same LAN, no NAT needed).
+// "direct"  — a VERNEX-PUNCH UDP packet was received from this peer's external address.
+// "relayed" — connection falls through the TCP daemon relay; hole punch not yet confirmed.
+func (n *Node) connectionType(peer PeerEntry) string {
+	if u, err := url.Parse(peer.APIURL); err == nil && isPrivateIP(u.Hostname()) {
+		return "local"
+	}
+	n.peerHolesMu.RLock()
+	_, direct := n.peerHoles[peer.NodeID]
+	n.peerHolesMu.RUnlock()
+	if direct {
+		return "direct"
+	}
+	return "relayed"
+}
+
+// sendHolePunchPackets sends count UDP "VERNEX-PUNCH" datagrams to addr with 50ms spacing.
+func (n *Node) sendHolePunchPackets(addr *net.UDPAddr, count int) {
+	if n.udpConn == nil || addr == nil {
+		return
+	}
+	for i := 0; i < count; i++ {
+		n.udpConn.WriteToUDP([]byte("VERNEX-PUNCH"), addr) //nolint:errcheck
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// initiatePunch triggers simultaneous UDP hole punching toward peer.
+// Signals the peer via /punch-signal so both sides open NAT holes concurrently.
+func (n *Node) initiatePunch(peer PeerEntry) {
+	if peer.ExternalIP == "" || peer.ExternalPort == 0 {
+		return
+	}
+	target := &net.UDPAddr{IP: net.ParseIP(peer.ExternalIP), Port: peer.ExternalPort}
+	extIP, _ := n.externalIP.Load().(string)
+	extPort := int(n.externalPort.Load())
+	go func() {
+		if err := signalPunch(peer.APIURL, extIP, extPort); err != nil {
+			fmt.Printf("  [!] punch-signal → %s failed: %v\n", peer.NodeID, err)
+		}
+	}()
+	n.sendHolePunchPackets(target, 5)
 }
 
 // signRequest adds hybrid signing headers to an outgoing inter-node HTTP request.
@@ -1156,6 +1215,43 @@ func discoverExternalEndpoint(cfg NodeConfig) (string, int) {
 	return "", 0
 }
 
+// isPrivateIP returns true when ip falls within RFC 1918 private ranges or loopback.
+// Used to classify same-LAN peers that don't need NAT hole punching.
+func isPrivateIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"} {
+		_, network, _ := net.ParseCIDR(cidr)
+		if network.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
+// signalPunch sends a /punch-signal to targetAPIURL, instructing that node to initiate
+// UDP hole punching toward punchIP:punchPort simultaneously.
+func signalPunch(targetAPIURL, punchIP string, punchPort int) error {
+	payload, _ := json.Marshal(map[string]any{
+		"punch_ip":   punchIP,
+		"punch_port": punchPort,
+	})
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		},
+	}
+	resp, err := client.Post(targetAPIURL+"/punch-signal", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // peerAPIURL derives a peer's daemon API URL from its Ollama base_url by
 // replacing the port with 7701 and switching to https.
 func peerAPIURL(peer PeerNode) (string, error) {
@@ -1376,6 +1472,57 @@ func main() {
 		fmt.Printf("  [✓] Peer heartbeat goroutine started (%d peers)\n", len(cfg.PeerNodes))
 	}
 
+	// Start UDP listener on daemonPort for hole-punch packets (coexists with the TCP listener below).
+	// Single UDPConn handles both send (WriteToUDP) and receive (ReadFromUDP).
+	{
+		udpAddr := &net.UDPAddr{Port: cfg.DaemonPort}
+		udpConn, uerr := net.ListenUDP("udp", udpAddr)
+		if uerr != nil {
+			fmt.Printf("  [!] UDP listener failed on port %d: %v (hole punching disabled)\n", cfg.DaemonPort, uerr)
+		} else {
+			node.udpConn = udpConn
+			fmt.Printf("  [✓] UDP listener on port %d (hole punching)\n", cfg.DaemonPort)
+			go func() {
+				buf := make([]byte, 64)
+				for {
+					n2, remoteAddr, err := udpConn.ReadFromUDP(buf)
+					if err != nil {
+						return
+					}
+					if string(buf[:n2]) != "VERNEX-PUNCH" {
+						continue
+					}
+					for _, p := range node.peerRegistry.LivePeers() {
+						if p.ExternalIP == remoteAddr.IP.String() {
+							node.peerHolesMu.Lock()
+							if _, already := node.peerHoles[p.NodeID]; !already {
+								node.peerHoles[p.NodeID] = remoteAddr
+								fmt.Printf("  [✓] UDP hole punched  peer=%s  addr=%s\n", p.NodeID, remoteAddr)
+							}
+							node.peerHolesMu.Unlock()
+							break
+						}
+					}
+				}
+			}()
+		}
+	}
+
+	// Auto-punch goroutine: every 5 minutes attempt direct connections to RELAYED peers.
+	// Skips LOCAL peers (same LAN, no NAT) and peers with no known external endpoint.
+	go func() {
+		time.Sleep(15 * time.Second)
+		for {
+			for _, p := range node.peerRegistry.LivePeers() {
+				if node.connectionType(p) == "relayed" && p.ExternalIP != "" {
+					fmt.Printf("  [→] auto-punch: initiating toward %s (%s:%d)\n", p.NodeID, p.ExternalIP, p.ExternalPort)
+					go node.initiatePunch(p)
+				}
+			}
+			time.Sleep(5 * time.Minute)
+		}
+	}()
+
 	// Start HTTP status API on port 7701
 	go func() {
 		http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
@@ -1383,6 +1530,16 @@ func main() {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			pubIP, _ := node.cachedPublicIP.Load().(string)
 			extIP, _ := node.externalIP.Load().(string)
+			livePeers := node.peerRegistry.LivePeers()
+			directCount, localCount := 0, 0
+			for _, p := range livePeers {
+				switch node.connectionType(p) {
+				case "direct":
+					directCount++
+				case "local":
+					localCount++
+				}
+			}
 			json.NewEncoder(w).Encode(statusResponse{
 				NodeStats:    node.getStats(),
 				IPAddress:    outboundIP("8.8.8.8"),
@@ -1390,6 +1547,8 @@ func main() {
 				PublicIP:     pubIP,
 				ExternalIP:   extIP,
 				ExternalPort: int(node.externalPort.Load()),
+				DirectPeers:  directCount,
+				LocalPeers:   localCount,
 			})
 		})
 		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -1695,6 +1854,7 @@ func main() {
 				APIURL         string `json:"api_url"`
 				ExternalIP     string `json:"external_ip,omitempty"`
 				ExternalPort   int    `json:"external_port,omitempty"`
+				ConnectionType string `json:"connection_type"`
 				LastSeenAgoSec int64  `json:"last_seen_ago_sec"`
 			}
 			out := make([]peerOut, 0, len(peers))
@@ -1704,6 +1864,7 @@ func main() {
 					APIURL:         p.APIURL,
 					ExternalIP:     p.ExternalIP,
 					ExternalPort:   p.ExternalPort,
+					ConnectionType: node.connectionType(p),
 					LastSeenAgoSec: int64(time.Since(p.LastSeen).Seconds()),
 				})
 			}
@@ -1867,6 +2028,67 @@ func main() {
 			fmt.Printf("  [✗] trust denied  id=%s\n", req.NodeID)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"status": "denied", "node_id": req.NodeID})
+		})
+
+		// /punch-request — bootstrap coordination endpoint.
+		// Looks up both peers in the registry and signals each to punch toward the other.
+		http.HandleFunc("/punch-request", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "POST required", http.StatusMethodNotAllowed)
+				return
+			}
+			var req struct {
+				InitiatorID string `json:"initiator_id"`
+				TargetID    string `json:"target_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			initiator, ok1 := node.peerRegistry.GetByNodeID(req.InitiatorID)
+			target, ok2 := node.peerRegistry.GetByNodeID(req.TargetID)
+			if !ok1 || !ok2 {
+				http.Error(w, "one or both peers not registered", http.StatusNotFound)
+				return
+			}
+			go func() {
+				if err := signalPunch(initiator.APIURL, target.ExternalIP, target.ExternalPort); err != nil {
+					fmt.Printf("  [!] punch-request: signal to initiator %s failed: %v\n", req.InitiatorID, err)
+				}
+			}()
+			go func() {
+				if err := signalPunch(target.APIURL, initiator.ExternalIP, initiator.ExternalPort); err != nil {
+					fmt.Printf("  [!] punch-request: signal to target %s failed: %v\n", req.TargetID, err)
+				}
+			}()
+			fmt.Printf("  [↔] punch-request: coordinating %s ↔ %s\n", req.InitiatorID, req.TargetID)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "punching"})
+		})
+
+		// /punch-signal — node receives instruction to punch toward a peer's external endpoint.
+		http.HandleFunc("/punch-signal", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "POST required", http.StatusMethodNotAllowed)
+				return
+			}
+			var req struct {
+				PunchIP   string `json:"punch_ip"`
+				PunchPort int    `json:"punch_port"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			if req.PunchIP == "" || req.PunchPort == 0 {
+				http.Error(w, "punch_ip and punch_port required", http.StatusBadRequest)
+				return
+			}
+			target := &net.UDPAddr{IP: net.ParseIP(req.PunchIP), Port: req.PunchPort}
+			go node.sendHolePunchPackets(target, 5)
+			fmt.Printf("  [→] punch-signal: punching toward %s:%d\n", req.PunchIP, req.PunchPort)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "punching"})
 		})
 
 		fmt.Printf("  [✓] Dashboard API (HTTPS) listening on port %d\n", node.cfg.APIPort)
