@@ -2081,6 +2081,37 @@ func main() {
 			json.NewEncoder(w).Encode(map[string]string{"status": "denied", "node_id": req.NodeID})
 		})
 
+		// /peer-status/{node_id} — proxy /status to a registered peer's api_url.
+		// Lets the dashboard fetch remote node status through the bootstrap node
+		// when the remote node isn't directly reachable inbound (behind NAT).
+		http.HandleFunc("/peer-status/", func(w http.ResponseWriter, r *http.Request) {
+			nodeID := strings.TrimPrefix(r.URL.Path, "/peer-status/")
+			if nodeID == "" {
+				http.Error(w, "node_id required in path", http.StatusBadRequest)
+				return
+			}
+			peer, ok := node.peerRegistry.GetByNodeID(nodeID)
+			if !ok {
+				http.Error(w, "peer not registered", http.StatusNotFound)
+				return
+			}
+			client := &http.Client{
+				Timeout: 3 * time.Second,
+				Transport: &http.Transport{
+					TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+				},
+			}
+			resp, err := client.Get(peer.APIURL + "/status")
+			if err != nil {
+				http.Error(w, fmt.Sprintf("peer unreachable: %v", err), http.StatusServiceUnavailable)
+				return
+			}
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			io.Copy(w, resp.Body) //nolint:errcheck
+		})
+
 		// /punch-request — bootstrap coordination endpoint.
 		// Looks up both peers in the registry and signals each to punch toward the other.
 		http.HandleFunc("/punch-request", func(w http.ResponseWriter, r *http.Request) {

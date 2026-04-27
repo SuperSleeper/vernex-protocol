@@ -13,7 +13,16 @@ v0.9.1
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
 
 ## What Was Just Completed
-- IP change watchdog + NAT registration fix (v0.9.1)
+- Relay status polling for remote nodes via bootstrap proxy
+- /peer-status/{node_id} endpoint: proxies /status to a registered peer's api_url; 503 if unreachable
+- dashboard index(): direct poll with 1s timeout for remote nodes, falls back to /peer-status/{node_id} relay
+- LOCAL nodes still use 2s direct timeout (no relay needed)
+- via_relay flag tracked per node; dashboard shows ↔ RELAY badge (blue) next to ONLINE for relayed nodes
+- relay badge CSS: .badge.relay { background: #1a2a3a; color: #58a6ff }
+- Compact table status cell also shows ↔ RELAY indicator
+
+## Previously Completed (v0.9.1)
+- IP change watchdog + NAT registration fix
 - registerWithPeers(): api_url now uses external IP when behind NAT (extIP != LAN IP)
 - lastLANIP + lastPublicIP atomic.Value fields on Node; initialized in NewNode()
 - IP watchdog goroutine (30s tick): compares LAN + cached public IP against last known

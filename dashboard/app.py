@@ -72,6 +72,7 @@ DASHBOARD_HTML = """
     .badge.online   { background: #1a4a1f; color: #3fb950; }
     .badge.offline  { background: #3d1a1a; color: #f85149; }
     .badge.pending  { background: #2a1f00; color: #d29922; }
+    .badge.relay    { background: #1a2a3a; color: #58a6ff; }
     .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin-bottom: 1.2rem; }
     .stat { background: #0d1117; border-radius: 6px; padding: 0.8rem; }
     .stat-label { font-size: 0.7rem; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
@@ -137,6 +138,7 @@ DASHBOARD_HTML = """
           <span class="badge {{ 'online' if data.online else 'offline' }}">
             {{ 'ONLINE' if data.online else 'OFFLINE' }}
           </span>
+          {% if data.online and data.via_relay %}<span class="badge relay">↔ RELAY</span>{% endif %}
           {% if pending %}<span class="badge pending">⚠ PENDING APPROVAL</span>{% endif %}
         </div>
       </div>
@@ -237,6 +239,7 @@ DASHBOARD_HTML = """
             <span class="{{ 'ct-online' if data.online else 'ct-offline' }}">
               {{ 'ONLINE' if data.online else 'OFFLINE' }}
             </span>
+            {% if data.online and data.via_relay %}&nbsp;<span class="badge relay" style="font-size:0.6rem;">↔ RELAY</span>{% endif %}
             {% if pending %}&nbsp;<span class="badge pending" style="font-size:0.6rem;">⚠ PENDING</span>{% endif %}
           </td>
           <td style="color:#8b949e;">{{ data.ip_address if data.online else '—' }}</td>
@@ -334,27 +337,45 @@ def index():
     for name, node_info in nodes_map.items():
         url = node_info["url"] if isinstance(node_info, dict) else node_info
         conn_type = node_info.get("connection_type", "relayed") if isinstance(node_info, dict) else "local"
+        via_relay = False
+        d = None
+
+        # LOCAL nodes (same LAN): poll directly with normal timeout.
+        # Remote nodes: try direct with a short timeout, fall back to relay through bootstrap.
+        direct_timeout = 2 if conn_type == "local" else 1
         try:
-            r = requests.get(f"{url}/status", timeout=2, verify=False)
+            r = requests.get(f"{url}/status", timeout=direct_timeout, verify=False)
             d = r.json()
-            nodes[name] = {
-                "online": True,
-                "node_id": d["node_id"],
-                "uptime": fmt_uptime(d["uptime_seconds"]),
-                "total_connections": d["total_connections"],
-                "contribution_score": d["contribution_score"],
-                "version": d["version"],
-                "personal_partition_pct": d["personal_partition_pct"],
-                "social_partition_pct": d["social_partition_pct"],
-                "ip_address": d.get("ip_address", "—"),
-                "public_ip": d.get("public_ip", "—"),
-                "external_ip": d.get("external_ip", "—"),
-                "connection_type": conn_type,
-            }
-            total_online += 1
-            network_score += d["contribution_score"]
         except Exception:
+            if name != "local" and conn_type != "local":
+                try:
+                    r = requests.get(f"{LOCAL_URL}/peer-status/{name}", timeout=3, verify=False)
+                    d = r.json()
+                    via_relay = True
+                except Exception:
+                    pass
+
+        if d is None:
             nodes[name] = {"online": False}
+            continue
+
+        nodes[name] = {
+            "online": True,
+            "node_id": d["node_id"],
+            "uptime": fmt_uptime(d["uptime_seconds"]),
+            "total_connections": d["total_connections"],
+            "contribution_score": d["contribution_score"],
+            "version": d["version"],
+            "personal_partition_pct": d["personal_partition_pct"],
+            "social_partition_pct": d["social_partition_pct"],
+            "ip_address": d.get("ip_address", "—"),
+            "public_ip": d.get("public_ip", "—"),
+            "external_ip": d.get("external_ip", "—"),
+            "connection_type": conn_type,
+            "via_relay": via_relay,
+        }
+        total_online += 1
+        network_score += d["contribution_score"]
 
     trust_map = {}
     try:
