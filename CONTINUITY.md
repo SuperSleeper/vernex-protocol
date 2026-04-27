@@ -1,10 +1,10 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-April 26, 2026 (session 2)
+April 26, 2026 (session 3)
 
 ## Current Version
-v0.7.0
+v0.8.0
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -13,25 +13,31 @@ v0.7.0
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
 
 ## What Was Just Completed
-- Inline trust approval: pending nodes highlighted yellow in node card and compact table row
-- Removed separate trust banner — APPROVE/DENY now appear directly in the node's card/row
-- trust_map dict passed to Jinja2 template, keyed by node_id for O(1) lookup
-- CSS: .card.pending (yellow border), .badge.pending, .ct-pending (compact row), btn-approve/deny shared styles
-- JS: approveTrust/denyTrust dims both card (tr-{id}) and compact row (tr-ct-{id}) before reload
+- ML-DSA 44 (CRYSTALS-Dilithium, NIST FIPS 204) hybrid post-quantum crypto upgrade
+- Both nodes now generate ed25519 + ML-DSA 44 keypairs at startup
+- New key files: config/node.mldsa.key (2560B, mode 0600), config/node.mldsa.pub (base64, shareable)
+- All inter-node requests now carry both X-Vernex-Signature (ed25519) and X-Vernex-Signature-MLDSA headers
+- ML-DSA enforcement is opt-in per peer via mldsa_public_key in peer_nodes[] config (rolling upgrade)
+- New config field: peer_nodes[].mldsa_public_key (omitempty — optional until operator activates it)
+- Trust request / approve flow updated to capture and persist mldsa_public_key
+- Banner updated to show truncated ML-DSA 44 public key alongside ed25519 key
+- circl v1.6.3 dependency added (github.com/cloudflare/circl)
+- 9-case test suite passes: round-trip, sign/verify, tampered-sig rejection, wrong-key rejection, replay protection
+- Version bumped to v0.8.0
 
 ## Security Stack (in place)
-- ed25519 cryptographic node identity — VRX- ID derived from public key hash
-- TLS on port 7701 — self-signed cert from ed25519 keypair
+- **Hybrid post-quantum identity**: ed25519 + ML-DSA 44 — both sigs on inter-node requests
+- TLS on port 7701 — self-signed cert from ed25519 keypair (ML-DSA in X.509 deferred to distributed CA)
 - Sliding window rate limiter — 60 req/min, per node ID or IP
 - Replay protection — 30s timestamp window on inter-node requests
 - Trust request approval — operator must approve new node public keys via dashboard
-- InsecureSkipVerify TEMPORARY — pending distributed CA + ML-DSA upgrade
+- InsecureSkipVerify TEMPORARY — pending distributed CA (replaces after ML-DSA CA phase)
 
 ## Immediate Next Steps (in priority order)
-1. Push and test on Node-2: git pull, go build, restart daemon, run setup script to validate trust request flow
-2. ML-DSA post-quantum crypto — upgrade ed25519 to CRYSTALS-Dilithium (cloudflare/circl)
+1. Deploy v0.8.0 to Node-2: git pull, go build, restart daemon — Node-2 generates its own ML-DSA keypair
+2. Exchange ML-DSA public keys: copy node.mldsa.pub from each node into the other's peer_nodes[].mldsa_public_key in config — activates hybrid enforcement
 3. Brave Search API — live web results replacing DDG Instant Answers
-4. Distributed CA — threshold-signed, no single point of failure
+4. Distributed CA — threshold-signed, no single point of failure (ML-DSA certs in X.509)
 5. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
 6. Rename "Social" → "Compute Donation" in dashboard and daemon
 7. Version string auto-detection from source instead of hardcoded
@@ -70,4 +76,4 @@ curl -sk https://localhost:7701/peers | jq .
 ```
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.7.0. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182) running with full security stack: ed25519 identity, TLS on 7701, rate limiting, trust request approval via dashboard. Trust requests appear inline in node cards (yellow highlight, APPROVE/DENY buttons). Dynamic node discovery via heartbeat. Setup/wipe scripts validated. Domains: vernex.net, vernex.org. Patent pending US App. 64/015,885, deadline March 24 2027. Next: test on Node-2 (git pull + rebuild), then ML-DSA post-quantum upgrade. CONTINUITY.md and CLAUDE.md in repo root have full context.*
+*Vernex Protocol v0.8.0. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. ML-DSA enforcement is per-peer opt-in (add mldsa_public_key to peer config to activate). Next: deploy v0.8.0 on Node-2, exchange ML-DSA public keys, activate hybrid enforcement. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*

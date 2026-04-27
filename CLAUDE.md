@@ -13,10 +13,10 @@ A Python dashboard provides a real-time view of node status and token activity.
 
 ---
 
-## Current State (as of April 18, 2026)
+## Current State (as of April 26, 2026)
 
 ### Working
-- Go daemon v0.7.0 running on Node-1 (Node-2 pending pull/build)
+- Go daemon v0.8.0 running on Node-1 (Node-2 pending pull/build)
 - P2P TCP listener on port 7700
 - **HTTPS** API on port 7701: `/status`, `/health`, `/submit`, `/consent`, `/queue`
 - Contribution score tracking (increments over time, per connection, and per LLM job)
@@ -37,6 +37,9 @@ A Python dashboard provides a real-time view of node status and token activity.
 - Priority ordering validated under concurrent load
 - Commons Review — Class 2 requests assessed by Mistral for community benefit;
   upgrade to Class 1 suggested but requires explicit `/consent` call; 60s TTL expiry
+- **Hybrid post-quantum crypto**: ed25519 + ML-DSA 44 (CRYSTALS-Dilithium, NIST FIPS 204)
+  — both signatures on all inter-node requests; ML-DSA enforcement is rolling (activated
+  per-peer by setting `mldsa_public_key` in config)
 
 ### Node Registry
 - **vernex-node1**: 172.17.0.132 — RTX 3070 / 64GB RAM — primary dev machine (Pop!_OS)
@@ -98,18 +101,33 @@ A Python dashboard provides a real-time view of node status and token activity.
   upgrade suggested via `status: commons_review` response; explicit `/consent` required;
   pending reviews expire after 60s and auto-execute as Class 2
 
+### Hybrid post-quantum signing (v0.8.0)
+- Every node generates **two keypairs** at startup:
+  - `config/node.key` — ed25519 seed (32 B, mode 0600) — node identity anchor
+  - `config/node.mldsa.key` — ML-DSA 44 private key (2560 B, mode 0600) — post-quantum layer
+  - `config/node.mldsa.pub` — ML-DSA 44 public key base64 — share with peer operators
+- All inter-node requests carry two headers: `X-Vernex-Signature` (ed25519) and
+  `X-Vernex-Signature-MLDSA` (ML-DSA 44). Both use the same message format:
+  `nodeID|timestamp|hex(SHA256(body))`
+- ML-DSA enforcement is **per-peer, opt-in**: only enforced when `mldsa_public_key`
+  is present in the peer's `peer_nodes[]` entry — enabling rolling upgrades without
+  coordinated simultaneous restarts
+- Node ID derivation unchanged (still `VRX-` + hex(SHA256(ed25519_pub)[:8]))
+- TLS cert stays as ed25519 — ML-DSA in X.509 deferred to distributed CA phase
+
 ### Adding a peer node
-1. Run the daemon on the new node to generate its keypair
-2. Copy `config/node.pub` (base64 public key) from the new node
+1. Run the daemon on the new node to generate both keypairs
+2. Copy `config/node.pub` (ed25519) and `config/node.mldsa.pub` (ML-DSA 44) from the new node
 3. Add to **both** nodes' `config/node.json`:
 ```json
 "peer_nodes": [{
   "name": "node2",
   "base_url": "http://<ip>:11434",
-  "public_key": "<base64 from node2's node.pub>"
+  "public_key": "<base64 from node2's node.pub>",
+  "mldsa_public_key": "<base64 from node2's node.mldsa.pub>"
 }]
 ```
-4. Restart both daemons — routing and trust are now live
+4. Restart both daemons — routing and full hybrid trust are now live
 
 ### HTTP API Endpoints
 | Endpoint | Method | Description |
@@ -269,9 +287,10 @@ drivers, or Ollama models — those belong to the system.
 bash scripts/vernex-node-wipe.sh
 ```
 
-**Warning:** wiping `~/vernex/` destroys `config/node.key` and `config/node.pub`.
-The node identity (`VRX-xxxx`) is permanently lost. Back up the keypair before wiping
-if you plan to re-register the same node identity with the network.
+**Warning:** wiping `~/vernex/` destroys `config/node.key`, `config/node.pub`,
+`config/node.mldsa.key`, and `config/node.mldsa.pub`. The node identity (`VRX-xxxx`) is
+permanently lost. Back up all four key files before wiping if you plan to re-register
+the same node identity with the network.
 
 ---
 
@@ -366,6 +385,9 @@ cd daemon && go build -o vernex-node .
 | Mar 2026 | upgrade field is pointer (*bool) in consent | Prevents implicit consent — omitting upgrade returns 400; legally significant |
 | Mar 2026 | Pending reviews expire as Class 2, not dropped | User gets their answer even if they miss the consent window |
 | Apr 2026 | TLS on port 7701 with self-signed cert from ed25519 keypair | Encrypts inter-node traffic; cert generated in memory at startup, no extra key files. InsecureSkipVerify used by peers/dashboard — temporary pending distributed CA + ML-DSA upgrade |
+| Apr 2026 | Hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium) signing | Post-quantum resistant; both sigs on every inter-node request; ML-DSA enforcement opt-in per peer via mldsa_public_key in config — rolling upgrade without coordinated restart |
+| Apr 2026 | Node ID derivation unchanged after ML-DSA upgrade | ID is still SHA256(ed25519_pub)[:8] — avoids re-registering live nodes; ML-DSA is an additional signing layer, not the identity anchor |
+| Apr 2026 | ML-DSA private key stored as raw bytes (2560 B, mode 0600) | No seed-based regeneration to avoid subtle ML-DSA key-expansion variations; load = unmarshal full privkey; pub derived from privkey via Public() |
 
 ---
 

@@ -29,14 +29,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cloudflare/circl/sign"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa44"
 	"github.com/godbus/dbus/v5"
 )
 
+var mldsaScheme = mldsa44.Scheme()
+
 // PeerNode is a known peer whose public key we trust for signature verification.
 type PeerNode struct {
-	Name      string `json:"name"`
-	BaseURL   string `json:"base_url"`
-	PublicKey string `json:"public_key"` // base64-encoded ed25519 public key (32 bytes)
+	Name           string `json:"name"`
+	BaseURL        string `json:"base_url"`
+	PublicKey      string `json:"public_key"`                 // base64 ed25519 public key (32 bytes)
+	MLDSAPublicKey string `json:"mldsa_public_key,omitempty"` // base64 ML-DSA 44 public key (1312 bytes); optional — hybrid enforcement only when set
 }
 
 type NodeConfig struct {
@@ -480,6 +485,54 @@ func loadOrGenerateKeypair(configDir string) (ed25519.PrivateKey, ed25519.Public
 	return privKey, pubKey, nil
 }
 
+// loadOrGenerateMLDSAKeypair loads an existing ML-DSA 44 keypair from configDir or
+// generates and persists a new one. Private key is stored raw (2560 bytes, mode 0600);
+// public key is stored base64-encoded for easy sharing with peer operators.
+func loadOrGenerateMLDSAKeypair(configDir string) (sign.PublicKey, sign.PrivateKey, error) {
+	keyPath := filepath.Join(configDir, "node.mldsa.key")
+	pubPath := filepath.Join(configDir, "node.mldsa.pub")
+
+	privBytes, err := os.ReadFile(keyPath)
+	if err == nil && len(privBytes) == mldsaScheme.PrivateKeySize() {
+		privKey, err := mldsaScheme.UnmarshalBinaryPrivateKey(privBytes)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing ML-DSA private key: %w", err)
+		}
+		pubKey, ok := privKey.Public().(sign.PublicKey)
+		if !ok {
+			return nil, nil, fmt.Errorf("type assertion for ML-DSA public key failed")
+		}
+		fmt.Printf("  [✓] ML-DSA 44 keypair loaded from %s\n", keyPath)
+		return pubKey, privKey, nil
+	}
+
+	// Generate new ML-DSA 44 keypair
+	pubKey, privKey, err := mldsaScheme.GenerateKey()
+	if err != nil {
+		return nil, nil, fmt.Errorf("generating ML-DSA keypair: %w", err)
+	}
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return nil, nil, fmt.Errorf("creating config dir: %w", err)
+	}
+	privRaw, err := privKey.MarshalBinary()
+	if err != nil {
+		return nil, nil, fmt.Errorf("serializing ML-DSA private key: %w", err)
+	}
+	if err := os.WriteFile(keyPath, privRaw, 0600); err != nil {
+		return nil, nil, fmt.Errorf("writing node.mldsa.key: %w", err)
+	}
+	pubRaw, err := pubKey.MarshalBinary()
+	if err != nil {
+		return nil, nil, fmt.Errorf("serializing ML-DSA public key: %w", err)
+	}
+	pubB64 := base64.StdEncoding.EncodeToString(pubRaw) + "\n"
+	if err := os.WriteFile(pubPath, []byte(pubB64), 0644); err != nil {
+		return nil, nil, fmt.Errorf("writing node.mldsa.pub: %w", err)
+	}
+	fmt.Printf("  [✓] ML-DSA 44 keypair generated and saved to %s\n", keyPath)
+	return pubKey, privKey, nil
+}
+
 // --- Rate Limiter ---
 
 // RateLimiter enforces a per-key sliding-window rate limit.
@@ -630,11 +683,12 @@ func buildTLSConfig(privKey ed25519.PrivateKey, pubKey ed25519.PublicKey, nodeID
 
 // TrustRequest is an inbound request from a new node asking to join the trusted peer list.
 type TrustRequest struct {
-	NodeID      string    `json:"node_id"`
-	PublicKey   string    `json:"public_key"`
-	APIUrl      string    `json:"api_url"`
-	RequestedAt time.Time `json:"requested_at"`
-	SourceIP    string    `json:"source_ip"`
+	NodeID         string    `json:"node_id"`
+	PublicKey      string    `json:"public_key"`
+	MLDSAPublicKey string    `json:"mldsa_public_key,omitempty"` // ML-DSA 44 public key; optional
+	APIUrl         string    `json:"api_url"`
+	RequestedAt    time.Time `json:"requested_at"`
+	SourceIP       string    `json:"source_ip"`
 }
 
 type Node struct {
@@ -646,6 +700,8 @@ type Node struct {
 	reviewsMu        sync.Mutex
 	privateKey       ed25519.PrivateKey
 	publicKey        ed25519.PublicKey
+	mldsaPrivKey     sign.PrivateKey // ML-DSA 44 private key; nil-safe
+	mldsaPubKey      sign.PublicKey  // ML-DSA 44 public key
 	ollamaNodes      []ollamaNode
 	rateLimiter      *RateLimiter
 	peerRegistry     *PeerRegistry
@@ -784,18 +840,20 @@ func needsWebSearch(prompt string) (bool, string) {
 	return false, ""
 }
 
-func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKey) *Node {
+func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKey, mldsaPrivKey sign.PrivateKey, mldsaPubKey sign.PublicKey) *Node {
 	hostname, _ := os.Hostname()
 	limit := cfg.RateLimitPerMin
 	if limit <= 0 {
 		limit = 60
 	}
 	n := &Node{
-		cfg:          cfg,
-		scheduler:    NewScheduler(),
-		reviews:      make(map[string]pendingReview),
-		privateKey:   privKey,
-		publicKey:    pubKey,
+		cfg:              cfg,
+		scheduler:        NewScheduler(),
+		reviews:          make(map[string]pendingReview),
+		privateKey:       privKey,
+		publicKey:        pubKey,
+		mldsaPrivKey:     mldsaPrivKey,
+		mldsaPubKey:      mldsaPubKey,
 		ollamaNodes:      buildOllamaNodes(cfg),
 		rateLimiter:      NewRateLimiter(limit, 60*time.Second),
 		peerRegistry:     NewPeerRegistry(),
@@ -806,7 +864,7 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.7.0",
+			Version:           "0.8.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -835,10 +893,17 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.7.0  — Patent Pending       ║")
+	fmt.Println("║       v0.8.0  — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
-	fmt.Printf("  Public Key: %s\n", base64.StdEncoding.EncodeToString(n.publicKey))
+	fmt.Printf("  Ed25519   : %s\n", base64.StdEncoding.EncodeToString(n.publicKey))
+	mldsaRaw, _ := n.mldsaPubKey.MarshalBinary()
+	mldsaB64 := base64.StdEncoding.EncodeToString(mldsaRaw)
+	if len(mldsaB64) > 32 {
+		fmt.Printf("  ML-DSA 44 : %s…\n", mldsaB64[:32])
+	} else {
+		fmt.Printf("  ML-DSA 44 : %s\n", mldsaB64)
+	}
 	fmt.Printf("  Hostname  : %s\n", s.Hostname)
 	fmt.Printf("  Port      : %d  (P2P)\n", s.Port)
 	fmt.Printf("  HTTP      : %d (dashboard API)\n", s.APIPort)
@@ -847,23 +912,31 @@ func (n *Node) printBanner() {
 		s.PersonalPartition, s.SocialPartition)
 }
 
-// signRequest adds ed25519 signing headers to an outgoing inter-node HTTP request.
+// signRequest adds hybrid signing headers to an outgoing inter-node HTTP request.
 // Message signed: nodeID + "|" + timestamp + "|" + hex(SHA256(body))
+// Both ed25519 (classical) and ML-DSA 44 (post-quantum) signatures are attached.
+// Peers enforce ML-DSA only when mldsa_public_key is configured (rolling upgrade path).
 func (n *Node) signRequest(req *http.Request, body []byte) {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	h := sha256.Sum256(body)
 	bodyHash := hex.EncodeToString(h[:])
 	msg := n.cfg.NodeID + "|" + ts + "|" + bodyHash
+
 	sig := ed25519.Sign(n.privateKey, []byte(msg))
 	req.Header.Set("X-Vernex-Node-ID", n.cfg.NodeID)
 	req.Header.Set("X-Vernex-Timestamp", ts)
 	req.Header.Set("X-Vernex-Signature", base64.StdEncoding.EncodeToString(sig))
+
+	if n.mldsaPrivKey != nil {
+		mldsaSig := mldsaScheme.Sign(n.mldsaPrivKey, []byte(msg), nil)
+		req.Header.Set("X-Vernex-Signature-MLDSA", base64.StdEncoding.EncodeToString(mldsaSig))
+	}
 }
 
-// verifyPeerRequest verifies the ed25519 signature on an incoming inter-node request.
-// Requests without X-Vernex-Node-ID are treated as local UI / Flask proxy calls and
-// pass through without verification. Returns a non-nil error if headers are present
-// but invalid (bad timestamp, unknown peer, bad signature).
+// verifyPeerRequest verifies the hybrid signature on an incoming inter-node request.
+// Requests without X-Vernex-Node-ID pass through (local UI / Flask proxy).
+// ed25519 is always verified for signed requests. ML-DSA 44 is additionally enforced
+// when mldsa_public_key is configured for the peer (rolling upgrade: absent = not yet enrolled).
 func (n *Node) verifyPeerRequest(r *http.Request, body []byte) error {
 	nodeID := r.Header.Get("X-Vernex-Node-ID")
 	if nodeID == "" {
@@ -891,15 +964,34 @@ func (n *Node) verifyPeerRequest(r *http.Request, body []byte) error {
 
 	sig, err := base64.StdEncoding.DecodeString(sigB64)
 	if err != nil {
-		return fmt.Errorf("invalid signature encoding")
+		return fmt.Errorf("invalid ed25519 signature encoding")
 	}
 
 	h := sha256.Sum256(body)
 	bodyHash := hex.EncodeToString(h[:])
 	msg := nodeID + "|" + tsStr + "|" + bodyHash
+
 	if !ed25519.Verify(pubKey, []byte(msg), sig) {
-		return fmt.Errorf("signature mismatch")
+		return fmt.Errorf("ed25519 signature mismatch")
 	}
+
+	// ML-DSA 44 hybrid check — only enforced when peer has mldsa_public_key configured.
+	// If not configured, we skip silently (rolling upgrade: peer may not have upgraded yet).
+	mldsaPub, err := n.peerMLDSAPublicKey(nodeID)
+	if err == nil {
+		mldsaSigB64 := r.Header.Get("X-Vernex-Signature-MLDSA")
+		if mldsaSigB64 == "" {
+			return fmt.Errorf("ML-DSA signature required for hybrid-enrolled peer %s", nodeID)
+		}
+		mldsaSig, err := base64.StdEncoding.DecodeString(mldsaSigB64)
+		if err != nil {
+			return fmt.Errorf("invalid ML-DSA signature encoding")
+		}
+		if !mldsaScheme.Verify(mldsaPub, []byte(msg), mldsaSig, nil) {
+			return fmt.Errorf("ML-DSA signature mismatch")
+		}
+	}
+
 	return nil
 }
 
@@ -917,6 +1009,34 @@ func (n *Node) peerPublicKey(nodeID string) (ed25519.PublicKey, error) {
 		}
 	}
 	return nil, fmt.Errorf("unknown peer node ID: %s", nodeID)
+}
+
+// peerMLDSAPublicKey looks up a peer's ML-DSA 44 public key by matching their ed25519-derived
+// node ID against configured peers. Returns an error if no ML-DSA key is configured for the peer —
+// callers treat this as "ML-DSA not yet enrolled, skip hybrid check" (rolling upgrade path).
+func (n *Node) peerMLDSAPublicKey(nodeID string) (sign.PublicKey, error) {
+	for _, peer := range n.cfg.PeerNodes {
+		if peer.MLDSAPublicKey == "" {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(peer.PublicKey)
+		if err != nil || len(raw) != ed25519.PublicKeySize {
+			continue
+		}
+		if nodeIDFromPublicKey(ed25519.PublicKey(raw)) != nodeID {
+			continue
+		}
+		mldsaRaw, err := base64.StdEncoding.DecodeString(peer.MLDSAPublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ML-DSA public key encoding for peer %s", peer.Name)
+		}
+		pub, err := mldsaScheme.UnmarshalBinaryPublicKey(mldsaRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parsing ML-DSA public key for peer %s: %w", peer.Name, err)
+		}
+		return pub, nil
+	}
+	return nil, fmt.Errorf("no ML-DSA public key configured for node %s", nodeID)
 }
 
 // takeInhibitorLock takes a systemd-logind sleep/idle inhibitor lock.
@@ -1089,13 +1209,19 @@ func main() {
 		}
 	}
 
+	mldsaPubKey, mldsaPrivKey, err := loadOrGenerateMLDSAKeypair(configDir)
+	if err != nil {
+		fmt.Printf("  [!] ML-DSA keypair error: %v — exiting\n", err)
+		os.Exit(1)
+	}
+
 	tlsCfg, err := buildTLSConfig(privKey, pubKey, cfg.NodeID)
 	if err != nil {
 		fmt.Printf("  [!] TLS config error: %v — exiting\n", err)
 		os.Exit(1)
 	}
 
-	node := NewNode(cfg, privKey, pubKey)
+	node := NewNode(cfg, privKey, pubKey, mldsaPrivKey, mldsaPubKey)
 	node.printBanner()
 
 	// Take sleep/idle inhibitor lock via systemd-logind
@@ -1510,9 +1636,10 @@ func main() {
 				return
 			}
 			var req struct {
-				NodeID    string `json:"node_id"`
-				PublicKey string `json:"public_key"`
-				APIUrl    string `json:"api_url"`
+				NodeID         string `json:"node_id"`
+				PublicKey      string `json:"public_key"`
+				MLDSAPublicKey string `json:"mldsa_public_key,omitempty"`
+				APIUrl         string `json:"api_url"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -1523,11 +1650,12 @@ func main() {
 				return
 			}
 			entry := TrustRequest{
-				NodeID:      req.NodeID,
-				PublicKey:   req.PublicKey,
-				APIUrl:      req.APIUrl,
-				RequestedAt: time.Now(),
-				SourceIP:    srcHost,
+				NodeID:         req.NodeID,
+				PublicKey:      req.PublicKey,
+				MLDSAPublicKey: req.MLDSAPublicKey,
+				APIUrl:         req.APIUrl,
+				RequestedAt:    time.Now(),
+				SourceIP:       srcHost,
 			}
 			node.trustMu.Lock()
 			// Upsert: replace existing entry for the same node_id
@@ -1598,9 +1726,10 @@ func main() {
 				return
 			}
 			newPeer := PeerNode{
-				Name:      found.NodeID,
-				BaseURL:   deriveOllamaURL(found.APIUrl),
-				PublicKey: found.PublicKey,
+				Name:           found.NodeID,
+				BaseURL:        deriveOllamaURL(found.APIUrl),
+				PublicKey:      found.PublicKey,
+				MLDSAPublicKey: found.MLDSAPublicKey,
 			}
 			node.mu.Lock()
 			node.cfg.PeerNodes = append(node.cfg.PeerNodes, newPeer)
