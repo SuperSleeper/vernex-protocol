@@ -316,7 +316,7 @@ Respond only with valid JSON and no other text: {"community_benefit": true or fa
 
 // --- Multi-node Ollama routing ---
 
-const defaultModel = "mistral"
+const defaultModel = "mistral:7b-instruct-q4_K_M"
 
 type ollamaNode struct {
 	name    string
