@@ -1,7 +1,7 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-April 26, 2026 (session 4)
+April 27, 2026 (session 5)
 
 ## Current Version
 v0.8.0
@@ -13,6 +13,18 @@ v0.8.0
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
 
 ## What Was Just Completed
+- STUN endpoint discovery — Phase 1 of Vernex P2P (v0.8.1)
+- /stun endpoint: returns caller's external IP:port as seen through NAT, no auth required
+- discoverExternalEndpoint(): calls /stun on each bootstrap peer at startup, stores result in node.externalIP / node.externalPort (atomic)
+- PeerEntry extended: ExternalIP + ExternalPort recorded when peers register
+- /register handler: accepts external_ip + external_port in heartbeat payload
+- /peers response: includes external_ip + external_port per peer
+- /status response: includes external_ip + external_port for own node
+- registerWithPeers: includes own external endpoint in every heartbeat POST
+- Dashboard: External IP stat in card view + compact table column
+- Startup log: [✓] External endpoint: x.x.x.x:port (or [!] unknown if no peer responded)
+
+## Previously Completed
 - Brave Search API replacing DDG Instant Answers — live web results injected into LLM context
 - brave_api_key field added to NodeConfig (omitempty, loaded from config/node.json, gitignored)
 - braveSearchResponse struct parses web.results[].title/url/description from Brave API
@@ -43,9 +55,11 @@ v0.8.0
 - InsecureSkipVerify TEMPORARY — pending distributed CA (replaces after ML-DSA CA phase)
 
 ## Immediate Next Steps (in priority order)
-1. Deploy v0.8.0 to Node-2: git pull, go build, restart daemon — Node-2 generates its own ML-DSA keypair
-2. Exchange ML-DSA public keys: copy node.mldsa.pub from each node into the other's peer_nodes[].mldsa_public_key in config — activates hybrid enforcement
-3. Distributed CA — threshold-signed, no single point of failure (ML-DSA certs in X.509)
+1. Deploy v0.8.1 to Node-2: git pull, go build, restart daemon
+2. Verify /stun returns correct external IPs on both nodes
+3. Exchange ML-DSA public keys: copy node.mldsa.pub from each node into the other's peer_nodes[].mldsa_public_key in config — activates hybrid enforcement
+4. Phase 2 P2P — UDP hole punching: use STUN-discovered endpoints to initiate direct peer connections
+5. Distributed CA — threshold-signed, no single point of failure (ML-DSA certs in X.509)
 5. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
 6. Rename "Social" → "Compute Donation" in dashboard and daemon
 7. Version string auto-detection from source instead of hardcoded

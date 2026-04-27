@@ -603,9 +603,11 @@ const peerLiveTTL = 90 * time.Second
 
 // PeerEntry is a node that has registered itself with this node.
 type PeerEntry struct {
-	NodeID   string    `json:"node_id"`
-	APIURL   string    `json:"api_url"`
-	LastSeen time.Time `json:"last_seen"`
+	NodeID       string    `json:"node_id"`
+	APIURL       string    `json:"api_url"`
+	ExternalIP   string    `json:"external_ip,omitempty"`
+	ExternalPort int       `json:"external_port,omitempty"`
+	LastSeen     time.Time `json:"last_seen"`
 }
 
 // PeerRegistry holds in-memory heartbeat registrations from peer nodes.
@@ -707,6 +709,8 @@ type Node struct {
 	rateLimiter      *RateLimiter
 	peerRegistry     *PeerRegistry
 	cachedPublicIP   atomic.Value // string; refreshed every 10 min by a background goroutine
+	externalIP       atomic.Value // string; own external IP as seen by bootstrap peers via /stun
+	externalPort     atomic.Int32 // own external port as seen by bootstrap peers via /stun
 	trustRequests    []TrustRequest
 	trustMu          sync.Mutex
 	trustRateLimiter *RateLimiter // 3 requests per IP per hour
@@ -717,9 +721,11 @@ type Node struct {
 // (ip_address and gateway are instant local calls; public_ip comes from the cache).
 type statusResponse struct {
 	NodeStats
-	IPAddress string `json:"ip_address"`
-	Gateway   string `json:"gateway"`
-	PublicIP  string `json:"public_ip"`
+	IPAddress    string `json:"ip_address"`
+	Gateway      string `json:"gateway"`
+	PublicIP     string `json:"public_ip"`
+	ExternalIP   string `json:"external_ip,omitempty"`
+	ExternalPort int    `json:"external_port,omitempty"`
 }
 
 type SubmitRequest struct {
@@ -865,12 +871,13 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.8.0",
+			Version:           "0.8.1",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
 	}
 	n.cachedPublicIP.Store(fetchPublicIP())
+	n.externalIP.Store("")
 	return n
 }
 
@@ -894,7 +901,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.8.0  — Patent Pending       ║")
+	fmt.Println("║       v0.8.1  — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Ed25519   : %s\n", base64.StdEncoding.EncodeToString(n.publicKey))
@@ -1110,6 +1117,45 @@ func fetchPublicIP() string {
 	return ip
 }
 
+// stunResponse is the payload returned by the /stun endpoint.
+type stunResponse struct {
+	ExternalIP   string `json:"external_ip"`
+	ExternalPort int    `json:"external_port"`
+	NodeID       string `json:"node_id"`
+}
+
+// discoverExternalEndpoint calls /stun on each configured peer in turn and returns
+// the first successful response. This reveals the node's external IP:port as seen
+// through NAT — the foundation for UDP hole punching (Phase 2).
+// Returns ("", 0) if no peer responds.
+func discoverExternalEndpoint(cfg NodeConfig) (string, int) {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		},
+	}
+	for _, peer := range cfg.PeerNodes {
+		apiURL, err := peerAPIURL(peer)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Get(apiURL + "/stun")
+		if err != nil {
+			continue
+		}
+		var stun stunResponse
+		err = json.NewDecoder(resp.Body).Decode(&stun)
+		resp.Body.Close()
+		if err != nil || stun.ExternalIP == "" {
+			continue
+		}
+		fmt.Printf("  [✓] STUN via %s: external endpoint %s:%d\n", peer.Name, stun.ExternalIP, stun.ExternalPort)
+		return stun.ExternalIP, stun.ExternalPort
+	}
+	return "", 0
+}
+
 // peerAPIURL derives a peer's daemon API URL from its Ollama base_url by
 // replacing the port with 7701 and switching to https.
 func peerAPIURL(peer PeerNode) (string, error) {
@@ -1120,9 +1166,10 @@ func peerAPIURL(peer PeerNode) (string, error) {
 	return fmt.Sprintf("https://%s:7701", u.Hostname()), nil
 }
 
-// registerWithPeers POSTs our node_id and api_url to each peer's /register endpoint.
-// Failures are logged but not fatal — peers will pick us up on the next heartbeat.
-func registerWithPeers(cfg NodeConfig, ownAPIPort int) {
+// registerWithPeers POSTs our node_id, api_url, and external endpoint to each peer's
+// /register endpoint. Failures are logged but not fatal — peers will pick us up on the
+// next heartbeat. extIP/extPort are the STUN-discovered external address (may be empty).
+func registerWithPeers(cfg NodeConfig, ownAPIPort int, extIP string, extPort int) {
 	for _, peer := range cfg.PeerNodes {
 		apiURL, err := peerAPIURL(peer)
 		if err != nil {
@@ -1136,9 +1183,11 @@ func registerWithPeers(cfg NodeConfig, ownAPIPort int) {
 		localIP := outboundIP(host.Hostname())
 		ownURL := fmt.Sprintf("https://%s:%d", localIP, ownAPIPort)
 
-		payload, _ := json.Marshal(map[string]string{
-			"node_id": cfg.NodeID,
-			"api_url": ownURL,
+		payload, _ := json.Marshal(map[string]any{
+			"node_id":       cfg.NodeID,
+			"api_url":       ownURL,
+			"external_ip":   extIP,
+			"external_port": extPort,
 		})
 		client := &http.Client{
 			Timeout: 5 * time.Second,
@@ -1302,16 +1351,26 @@ func main() {
 		}
 	}()
 
-	// Register with all configured peers, then re-register every 60 seconds.
-	// This drives dynamic discovery — no hardcoded IPs needed in the dashboard.
+	// Discover external endpoint via STUN, then register with peers every 60 seconds.
+	// STUN reveals our external IP:port as seen through NAT — used in heartbeat payloads
+	// so peers know how to reach us for future UDP hole punching (Phase 2).
 	if len(cfg.PeerNodes) > 0 {
 		go func() {
 			// Brief delay so our own HTTP server is ready before we hit peers.
 			time.Sleep(2 * time.Second)
-			registerWithPeers(cfg, cfg.APIPort)
+			extIP, extPort := discoverExternalEndpoint(cfg)
+			node.externalIP.Store(extIP)
+			node.externalPort.Store(int32(extPort))
+			if extIP != "" {
+				fmt.Printf("  [✓] External endpoint: %s:%d\n", extIP, extPort)
+			} else {
+				fmt.Println("  [!] External endpoint: unknown (no bootstrap peer responded to /stun)")
+			}
+			registerWithPeers(cfg, cfg.APIPort, extIP, extPort)
 			ticker := time.NewTicker(60 * time.Second)
 			for range ticker.C {
-				registerWithPeers(cfg, cfg.APIPort)
+				curIP, _ := node.externalIP.Load().(string)
+				registerWithPeers(cfg, cfg.APIPort, curIP, int(node.externalPort.Load()))
 			}
 		}()
 		fmt.Printf("  [✓] Peer heartbeat goroutine started (%d peers)\n", len(cfg.PeerNodes))
@@ -1323,16 +1382,35 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			pubIP, _ := node.cachedPublicIP.Load().(string)
+			extIP, _ := node.externalIP.Load().(string)
 			json.NewEncoder(w).Encode(statusResponse{
-				NodeStats: node.getStats(),
-				IPAddress: outboundIP("8.8.8.8"),
-				Gateway:   defaultGateway(),
-				PublicIP:  pubIP,
+				NodeStats:    node.getStats(),
+				IPAddress:    outboundIP("8.8.8.8"),
+				Gateway:      defaultGateway(),
+				PublicIP:     pubIP,
+				ExternalIP:   extIP,
+				ExternalPort: int(node.externalPort.Load()),
 			})
 		})
 		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprintln(w, "ok")
+		})
+		// /stun — returns the caller's external IP:port as seen by this node.
+		// No auth required. Used by compute nodes to discover their NAT-translated endpoint.
+		http.HandleFunc("/stun", func(w http.ResponseWriter, r *http.Request) {
+			host, portStr, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				http.Error(w, "could not parse remote address", http.StatusInternalServerError)
+				return
+			}
+			port, _ := strconv.Atoi(portStr)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(stunResponse{
+				ExternalIP:   host,
+				ExternalPort: port,
+				NodeID:       node.cfg.NodeID,
+			})
 		})
 		http.HandleFunc("/submit", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost {
@@ -1574,7 +1652,7 @@ func main() {
 		})
 
 		// /register — peer heartbeat registration.
-		// Accepts {"node_id": "VRX-xxx", "api_url": "https://ip:7701"}.
+		// Accepts {"node_id": "VRX-xxx", "api_url": "https://ip:7701", "external_ip": "...", "external_port": 12345}.
 		// No signature required: registration is informational; trust is enforced at /submit.
 		http.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost {
@@ -1582,8 +1660,10 @@ func main() {
 				return
 			}
 			var req struct {
-				NodeID string `json:"node_id"`
-				APIURL string `json:"api_url"`
+				NodeID       string `json:"node_id"`
+				APIURL       string `json:"api_url"`
+				ExternalIP   string `json:"external_ip,omitempty"`
+				ExternalPort int    `json:"external_port,omitempty"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -1594,11 +1674,13 @@ func main() {
 				return
 			}
 			node.peerRegistry.Register(PeerEntry{
-				NodeID:   req.NodeID,
-				APIURL:   req.APIURL,
-				LastSeen: time.Now(),
+				NodeID:       req.NodeID,
+				APIURL:       req.APIURL,
+				ExternalIP:   req.ExternalIP,
+				ExternalPort: req.ExternalPort,
+				LastSeen:     time.Now(),
 			})
-			fmt.Printf("  [↔] registered peer  id=%s  url=%s\n", req.NodeID, req.APIURL)
+			fmt.Printf("  [↔] registered peer  id=%s  ext=%s:%d\n", req.NodeID, req.ExternalIP, req.ExternalPort)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "node_id": node.cfg.NodeID})
 		})
@@ -1611,6 +1693,8 @@ func main() {
 			type peerOut struct {
 				NodeID         string `json:"node_id"`
 				APIURL         string `json:"api_url"`
+				ExternalIP     string `json:"external_ip,omitempty"`
+				ExternalPort   int    `json:"external_port,omitempty"`
 				LastSeenAgoSec int64  `json:"last_seen_ago_sec"`
 			}
 			out := make([]peerOut, 0, len(peers))
@@ -1618,6 +1702,8 @@ func main() {
 				out = append(out, peerOut{
 					NodeID:         p.NodeID,
 					APIURL:         p.APIURL,
+					ExternalIP:     p.ExternalIP,
+					ExternalPort:   p.ExternalPort,
 					LastSeenAgoSec: int64(time.Since(p.LastSeen).Seconds()),
 				})
 			}

@@ -166,6 +166,10 @@ DASHBOARD_HTML = """
           <div class="stat-label">Public IP</div>
           <div class="stat-value ip">{{ data.public_ip }}</div>
         </div>
+        <div class="stat">
+          <div class="stat-label">External IP</div>
+          <div class="stat-value ip">{{ data.external_ip }}</div>
+        </div>
       </div>
 
       <div class="partition-bar">
@@ -207,6 +211,7 @@ DASHBOARD_HTML = """
           <th>Status</th>
           <th>IP</th>
           <th>Public IP</th>
+          <th>External IP</th>
           <th>Uptime</th>
           <th>Score</th>
           <th>Version</th>
@@ -230,6 +235,7 @@ DASHBOARD_HTML = """
           </td>
           <td style="color:#8b949e;">{{ data.ip_address if data.online else '—' }}</td>
           <td style="color:#8b949e;">{{ data.public_ip if data.online else '—' }}</td>
+          <td style="color:#8b949e;">{{ data.external_ip if data.online else '—' }}</td>
           <td style="color:#58a6ff;">{{ data.uptime if data.online else '—' }}</td>
           <td style="color:#3fb950;">{{ "%.1f"|format(data.contribution_score) if data.online else '—' }}</td>
           <td style="color:#8b949e;">{{ 'v' + data.version if data.online else '—' }}</td>
@@ -333,6 +339,7 @@ def index():
                 "social_partition_pct": d["social_partition_pct"],
                 "ip_address": d.get("ip_address", "—"),
                 "public_ip": d.get("public_ip", "—"),
+                "external_ip": d.get("external_ip", "—"),
             }
             total_online += 1
             network_score += d["contribution_score"]
