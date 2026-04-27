@@ -60,51 +60,49 @@ DASHBOARD_HTML = """
     /* ── Cards ── */
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 1.5rem; }
     .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; }
-    .card.online { border-left: 4px solid #3fb950; }
+    .card.online  { border-left: 4px solid #3fb950; }
     .card.offline { border-left: 4px solid #f85149; opacity: 0.6; }
+    .card.pending { border-left: 4px solid #d29922; background: #1a1600; }
     .node-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.2rem; }
     .node-name { font-size: 1.1rem; font-weight: bold; color: #e6edf3; }
     .node-id { font-size: 0.75rem; color: #58a6ff; margin-top: 2px; }
+    .badges { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
     .badge { font-size: 0.7rem; padding: 3px 10px; border-radius: 12px; font-weight: bold; }
-    .badge.online { background: #1a4a1f; color: #3fb950; }
-    .badge.offline { background: #3d1a1a; color: #f85149; }
+    .badge.online   { background: #1a4a1f; color: #3fb950; }
+    .badge.offline  { background: #3d1a1a; color: #f85149; }
+    .badge.pending  { background: #2a1f00; color: #d29922; }
     .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin-bottom: 1.2rem; }
     .stat { background: #0d1117; border-radius: 6px; padding: 0.8rem; }
     .stat-label { font-size: 0.7rem; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
     .stat-value { font-size: 1.3rem; color: #e6edf3; font-weight: bold; }
-    .stat-value.blue { color: #58a6ff; }
+    .stat-value.blue  { color: #58a6ff; }
     .stat-value.green { color: #3fb950; }
     .stat-value.amber { color: #d29922; }
-    .stat-value.ip { font-size: 0.95rem; color: #8b949e; }
+    .stat-value.ip    { font-size: 0.95rem; color: #8b949e; }
     .partition-bar { margin-top: 0.5rem; }
     .partition-label { font-size: 0.7rem; color: #8b949e; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
     .bar-track { background: #0d1117; border-radius: 4px; height: 20px; overflow: hidden; display: flex; }
     .bar-personal { background: #1f6feb; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; color: #e6edf3; }
-    .bar-social { background: #3fb950; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; color: #0d1117; font-weight: bold; }
+    .bar-social   { background: #3fb950; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; color: #0d1117; font-weight: bold; }
+    .card-trust-info { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid #3d2e00; font-size: 0.72rem; color: #8b949e; line-height: 1.6; }
+    .card-trust-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
     /* ── Compact table ── */
     .compact-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
     .compact-table th { color: #8b949e; text-transform: uppercase; letter-spacing: 1px; font-size: 0.65rem; padding: 0.5rem 0.8rem; text-align: left; border-bottom: 1px solid #30363d; white-space: nowrap; }
     .compact-table td { padding: 0.55rem 0.8rem; border-bottom: 1px solid #21262d; white-space: nowrap; }
-    .compact-table tbody tr:nth-child(odd) td { background: #0d1117; }
+    .compact-table tbody tr:nth-child(odd)  td { background: #0d1117; }
     .compact-table tbody tr:nth-child(even) td { background: #161b22; }
-    .ct-online { color: #3fb950; font-weight: bold; }
+    .compact-table tbody tr.ct-pending      td { background: #1a1600 !important; }
+    .ct-online  { color: #3fb950; font-weight: bold; }
     .ct-offline { color: #f85149; font-weight: bold; }
-    /* ── Footer ── */
-    .footer { margin-top: 2rem; color: #8b949e; font-size: 0.75rem; text-align: center; }
-    .version { color: #8b949e; font-size: 0.75rem; }
-    /* ── Trust requests ── */
-    .trust-banner { background: #2a1f00; border: 1px solid #d29922; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; }
-    .trust-banner-title { color: #d29922; font-weight: bold; font-size: 0.85rem; margin-bottom: 0.75rem; letter-spacing: 1px; }
-    .trust-item { display: flex; justify-content: space-between; align-items: center; background: #1a1500; border: 1px solid #3d2e00; border-radius: 6px; padding: 0.65rem 0.9rem; margin-top: 0.5rem; gap: 1rem; }
-    .trust-info { display: flex; align-items: baseline; gap: 1.2rem; flex-wrap: wrap; min-width: 0; }
-    .trust-nodeid { color: #e6edf3; font-weight: bold; font-size: 0.8rem; }
-    .trust-key { color: #8b949e; font-size: 0.72rem; font-family: 'Courier New', monospace; }
-    .trust-meta { color: #8b949e; font-size: 0.72rem; }
-    .trust-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+    /* ── Shared approve/deny buttons ── */
     .btn-approve { background: #1a4a1f; border: 1px solid #3fb950; color: #3fb950; font-family: 'Courier New', monospace; font-size: 0.72rem; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-weight: bold; letter-spacing: 1px; }
     .btn-approve:hover { background: #3fb950; color: #0d1117; }
-    .btn-deny { background: #3d1a1a; border: 1px solid #f85149; color: #f85149; font-family: 'Courier New', monospace; font-size: 0.72rem; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-weight: bold; letter-spacing: 1px; }
-    .btn-deny:hover { background: #f85149; color: #0d1117; }
+    .btn-deny    { background: #3d1a1a; border: 1px solid #f85149; color: #f85149; font-family: 'Courier New', monospace; font-size: 0.72rem; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-weight: bold; letter-spacing: 1px; }
+    .btn-deny:hover    { background: #f85149; color: #0d1117; }
+    /* ── Footer ── */
+    .footer  { margin-top: 2rem; color: #8b949e; font-size: 0.75rem; text-align: center; }
+    .version { color: #8b949e; font-size: 0.75rem; }
   </style>
 </head>
 <body>
@@ -119,32 +117,12 @@ DASHBOARD_HTML = """
     </div>
   </div>
 
-  <!-- Trust request banner (hidden when empty) -->
-  {% if trust_requests %}
-  <div class="trust-banner">
-    <div class="trust-banner-title">⚠ {{ trust_requests|length }} NODE(S) REQUESTING TO JOIN</div>
-    {% for tr in trust_requests %}
-    <div class="trust-item" id="tr-{{ tr.node_id }}">
-      <div class="trust-info">
-        <span class="trust-nodeid">{{ tr.node_id }}</span>
-        <span class="trust-key">{{ tr.public_key[:28] }}…</span>
-        <span class="trust-meta">from {{ tr.source_ip }}</span>
-        <span class="trust-meta">{{ tr.requested_at[:19] }}</span>
-        <span class="trust-meta" style="color:#58a6ff;">{{ tr.api_url }}</span>
-      </div>
-      <div class="trust-actions">
-        <button class="btn-approve" onclick="approveTrust('{{ tr.node_id }}')">APPROVE</button>
-        <button class="btn-deny" onclick="denyTrust('{{ tr.node_id }}')">DENY</button>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
-
   <!-- Cards view (default) -->
   <div class="grid" id="cards-view">
     {% for name, data in nodes.items() %}
-    <div class="card {{ 'online' if data.online else 'offline' }}">
+    {% set pending = data.online and data.node_id in trust_map %}
+    <div class="card {% if pending %}pending{% elif data.online %}online{% else %}offline{% endif %}"
+         id="tr-{{ data.node_id if data.online else name }}">
       <div class="node-header">
         <div>
           <div class="node-name">{{ name }}</div>
@@ -154,9 +132,12 @@ DASHBOARD_HTML = """
           <div class="node-id" style="color:#f85149">Unreachable</div>
           {% endif %}
         </div>
-        <span class="badge {{ 'online' if data.online else 'offline' }}">
-          {{ 'ONLINE' if data.online else 'OFFLINE' }}
-        </span>
+        <div class="badges">
+          <span class="badge {{ 'online' if data.online else 'offline' }}">
+            {{ 'ONLINE' if data.online else 'OFFLINE' }}
+          </span>
+          {% if pending %}<span class="badge pending">⚠ PENDING APPROVAL</span>{% endif %}
+        </div>
       </div>
 
       {% if data.online %}
@@ -198,6 +179,20 @@ DASHBOARD_HTML = """
           </div>
         </div>
       </div>
+
+      {% if pending %}
+      {% set tr = trust_map[data.node_id] %}
+      <div class="card-trust-info">
+        key: {{ tr.public_key[:28] }}… &nbsp;|&nbsp;
+        from {{ tr.source_ip }} &nbsp;|&nbsp;
+        {{ tr.requested_at[:19] }} &nbsp;|&nbsp;
+        {{ tr.api_url }}
+      </div>
+      <div class="card-trust-actions">
+        <button class="btn-approve" onclick="approveTrust('{{ data.node_id }}')">APPROVE</button>
+        <button class="btn-deny"    onclick="denyTrust('{{ data.node_id }}')">DENY</button>
+      </div>
+      {% endif %}
       {% endif %}
     </div>
     {% endfor %}
@@ -215,23 +210,37 @@ DASHBOARD_HTML = """
           <th>Uptime</th>
           <th>Score</th>
           <th>Version</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
         {% for name, data in nodes.items() %}
-        <tr>
+        {% set pending = data.online and data.node_id in trust_map %}
+        <tr class="{{ 'ct-pending' if pending else '' }}"
+            id="tr-ct-{{ data.node_id if data.online else name }}">
           <td>
             <div style="font-weight:bold; color:#e6edf3;">{{ name }}</div>
             {% if data.online %}<div style="font-size:0.65rem; color:#58a6ff; margin-top:2px;">{{ data.node_id }}</div>{% endif %}
           </td>
-          <td class="{{ 'ct-online' if data.online else 'ct-offline' }}">
-            {{ 'ONLINE' if data.online else 'OFFLINE' }}
+          <td>
+            <span class="{{ 'ct-online' if data.online else 'ct-offline' }}">
+              {{ 'ONLINE' if data.online else 'OFFLINE' }}
+            </span>
+            {% if pending %}&nbsp;<span class="badge pending" style="font-size:0.6rem;">⚠ PENDING</span>{% endif %}
           </td>
           <td style="color:#8b949e;">{{ data.ip_address if data.online else '—' }}</td>
           <td style="color:#8b949e;">{{ data.public_ip if data.online else '—' }}</td>
           <td style="color:#58a6ff;">{{ data.uptime if data.online else '—' }}</td>
           <td style="color:#3fb950;">{{ "%.1f"|format(data.contribution_score) if data.online else '—' }}</td>
           <td style="color:#8b949e;">{{ 'v' + data.version if data.online else '—' }}</td>
+          <td>
+            {% if pending %}
+            <div style="display:flex; gap:0.35rem;">
+              <button class="btn-approve" onclick="approveTrust('{{ data.node_id }}')">APPROVE</button>
+              <button class="btn-deny"    onclick="denyTrust('{{ data.node_id }}')">DENY</button>
+            </div>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -266,8 +275,10 @@ DASHBOARD_HTML = """
     applyMode(localStorage.getItem('vernex-view') || 'cards');
 
     function approveTrust(nodeId) {
-      var row = document.getElementById('tr-' + nodeId);
-      if (row) { row.style.opacity = '0.4'; row.style.pointerEvents = 'none'; }
+      ['tr-' + nodeId, 'tr-ct-' + nodeId].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) { el.style.opacity = '0.4'; el.style.pointerEvents = 'none'; }
+      });
       fetch('/api/trust-approve', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -275,8 +286,10 @@ DASHBOARD_HTML = """
       }).then(function() { location.reload(); });
     }
     function denyTrust(nodeId) {
-      var row = document.getElementById('tr-' + nodeId);
-      if (row) { row.style.opacity = '0.4'; row.style.pointerEvents = 'none'; }
+      ['tr-' + nodeId, 'tr-ct-' + nodeId].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) { el.style.opacity = '0.4'; el.style.pointerEvents = 'none'; }
+      });
       fetch('/api/trust-deny', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -326,10 +339,10 @@ def index():
         except Exception:
             nodes[name] = {"online": False}
 
-    trust_requests = []
+    trust_map = {}
     try:
         tr = requests.get(f"{LOCAL_URL}/trust-requests", timeout=2, verify=False)
-        trust_requests = tr.json() or []
+        trust_map = {t["node_id"]: t for t in (tr.json() or [])}
     except Exception:
         pass
 
@@ -339,7 +352,7 @@ def index():
         total_online=total_online,
         total_nodes=len(nodes_map),
         network_score=network_score,
-        trust_requests=trust_requests,
+        trust_map=trust_map,
     )
 
 @app.route("/ui")
