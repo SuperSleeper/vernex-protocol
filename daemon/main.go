@@ -724,7 +724,9 @@ type Node struct {
 	trustRateLimiter *RateLimiter    // 3 requests per IP per hour
 	peerHoles        map[string]*net.UDPAddr // keyed by node_id; set when UDP punch packet received
 	peerHolesMu      sync.RWMutex
-	udpConn          *net.UDPConn // single UDP socket on daemonPort for hole punching
+	udpConn          *net.UDPConn  // single UDP socket on daemonPort for hole punching
+	lastLANIP        atomic.Value  // string; last known LAN IP — watchdog detects changes
+	lastPublicIP     atomic.Value  // string; last known public IP — watchdog detects changes
 }
 
 // statusResponse is the /status payload. It embeds the static NodeStats fields
@@ -885,13 +887,16 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.9.0",
+			Version:           "0.9.1",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
 	}
-	n.cachedPublicIP.Store(fetchPublicIP())
+	initialPublicIP := fetchPublicIP()
+	n.cachedPublicIP.Store(initialPublicIP)
 	n.externalIP.Store("")
+	n.lastLANIP.Store(outboundIP("8.8.8.8"))
+	n.lastPublicIP.Store(initialPublicIP)
 	return n
 }
 
@@ -915,7 +920,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.9.0  — Patent Pending       ║")
+	fmt.Println("║       v0.9.1  — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Ed25519   : %s\n", base64.StdEncoding.EncodeToString(n.publicKey))
@@ -1276,8 +1281,11 @@ func registerWithPeers(cfg NodeConfig, ownAPIPort int, extIP string, extPort int
 		if err != nil {
 			continue
 		}
-		localIP := outboundIP(host.Hostname())
-		ownURL := fmt.Sprintf("https://%s:%d", localIP, ownAPIPort)
+		ownIP := outboundIP(host.Hostname())
+		if extIP != "" && extIP != ownIP {
+			ownIP = extIP // use external IP when behind NAT so bootstrap can reach us
+		}
+		ownURL := fmt.Sprintf("https://%s:%d", ownIP, ownAPIPort)
 
 		payload, _ := json.Marshal(map[string]any{
 			"node_id":       cfg.NodeID,
@@ -1444,6 +1452,49 @@ func main() {
 			ip := fetchPublicIP()
 			node.cachedPublicIP.Store(ip)
 			fmt.Printf("  [→] public IP refreshed: %s\n", ip)
+		}
+	}()
+
+	// IP change watchdog: every 30s compare current LAN + public IPs against last known values.
+	// On any change: re-run STUN, update external endpoint, re-register with all peers,
+	// and clear peerHoles (old UDP holes are invalid after an IP change).
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		for range ticker.C {
+			curLAN := outboundIP("8.8.8.8")
+			curPublic, _ := node.cachedPublicIP.Load().(string) // use cache — don't hammer ipify every 30s
+			prevLAN, _ := node.lastLANIP.Load().(string)
+			prevPublic, _ := node.lastPublicIP.Load().(string)
+
+			if curLAN == prevLAN && curPublic == prevPublic {
+				continue
+			}
+
+			fmt.Printf("  [→] IP change detected:")
+			if curLAN != prevLAN {
+				fmt.Printf(" LAN %s → %s", prevLAN, curLAN)
+			}
+			if curPublic != prevPublic {
+				fmt.Printf(" public %s → %s", prevPublic, curPublic)
+			}
+			fmt.Println()
+
+			node.lastLANIP.Store(curLAN)
+			node.lastPublicIP.Store(curPublic)
+
+			extIP, extPort := discoverExternalEndpoint(node.cfg)
+			node.externalIP.Store(extIP)
+			node.externalPort.Store(int32(extPort))
+
+			registerWithPeers(node.cfg, node.cfg.APIPort, extIP, extPort)
+
+			// Old UDP holes are tied to the previous IP — clear them so connectionType
+			// falls back to "relayed" until new holes are punched.
+			node.peerHolesMu.Lock()
+			node.peerHoles = make(map[string]*net.UDPAddr)
+			node.peerHolesMu.Unlock()
+
+			fmt.Println("  [✓] Re-registered with all peers after IP change")
 		}
 	}()
 

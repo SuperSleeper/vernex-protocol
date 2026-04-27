@@ -4,7 +4,7 @@
 April 27, 2026 (session 6)
 
 ## Current Version
-v0.9.0
+v0.9.1
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -13,7 +13,16 @@ v0.9.0
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
 
 ## What Was Just Completed
-- UDP hole punching — Phase 2 of Vernex P2P (v0.9.0)
+- IP change watchdog + NAT registration fix (v0.9.1)
+- registerWithPeers(): api_url now uses external IP when behind NAT (extIP != LAN IP)
+- lastLANIP + lastPublicIP atomic.Value fields on Node; initialized in NewNode()
+- IP watchdog goroutine (30s tick): compares LAN + cached public IP against last known
+- On change: re-runs discoverExternalEndpoint(), re-runs registerWithPeers(), clears peerHoles map
+- Uses cached public IP (not ipify) to avoid hammering external API every 30s
+- Version bumped to v0.9.1
+
+## Previously Completed (v0.9.0)
+- UDP hole punching — Phase 2 of Vernex P2P
 - peerHoles map + peerHolesMu + udpConn added to Node struct
 - UDP listener on port 7700 (coexists with TCP): records confirmed direct connections when VERNEX-PUNCH packet received
 - connectionType(peer): "local" (RFC1918 API URL), "direct" (UDP packet received), "relayed" (default)
@@ -61,10 +70,11 @@ v0.9.0
 - InsecureSkipVerify TEMPORARY — pending distributed CA (replaces after ML-DSA CA phase)
 
 ## Immediate Next Steps (in priority order)
-1. Deploy v0.9.0 to Node-2: git pull, go build, restart daemon
+1. Deploy v0.9.1 to Node-2: git pull, go build, restart daemon
 2. Verify /stun returns correct external IPs on both nodes
 3. Exchange ML-DSA public keys: copy node.mldsa.pub from each node into the other's peer_nodes[].mldsa_public_key in config — activates hybrid enforcement
 4. Test hole punching: watch for [✓] UDP hole punched in daemon logs after both nodes restart
+5. Test IP watchdog: change network on one node, watch for [→] IP change detected + [✓] Re-registered
 5. Distributed CA — threshold-signed, no single point of failure (ML-DSA certs in X.509)
 6. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
 7. Rename "Social" → "Compute Donation" in dashboard and daemon
@@ -138,4 +148,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.9.0. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. ML-DSA enforcement is per-peer opt-in (add mldsa_public_key to peer config to activate). Phase 1 (STUN) + Phase 2 (UDP hole punching) complete. connection_type in /peers and /status. Next: deploy v0.9.0 on Node-2, verify hole punch logs. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*
+*Vernex Protocol v0.9.1. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. ML-DSA enforcement is per-peer opt-in (add mldsa_public_key to peer config to activate). Phase 1 (STUN) + Phase 2 (UDP hole punching) + IP watchdog complete. Next: deploy v0.9.1 on Node-2, verify hole punch + watchdog logs. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*
