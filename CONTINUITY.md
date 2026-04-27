@@ -83,5 +83,39 @@ curl -sk https://172.17.0.182:7701/status | jq '{version, node_id}'
 curl -sk https://localhost:7701/peers | jq .
 ```
 
+## Planned Architecture — Bootstrap Node Tier
+
+### Node Types
+- **Compute Node** — standard contributor node, runs LLM inference, earns contribution score
+- **Regional Bootstrap Node** — serves a geographic region, coordinates peer discovery via STUN-like hole punching, higher score multiplier
+- **Global Bootstrap Node** — root rendezvous, always-on, public IP required, highest score multiplier
+
+### Why Bootstrap Nodes
+Compute nodes behind home NAT cannot accept inbound connections without port forwarding.
+Bootstrap nodes solve this via UDP hole punching (BitTorrent-style):
+1. Both nodes connect outbound to bootstrap
+2. Bootstrap shares their external IP:port with each other
+3. Nodes initiate UDP simultaneously — NATs open holes on both sides
+4. Direct P2P connection established — no firewall changes needed
+
+### Contribution Score Multipliers (planned)
+| Node Type | Multiplier | Reason |
+|-----------|------------|--------|
+| Compute Node | 1.0x | Base |
+| Regional Bootstrap | 2.5x | Always-on, public IP, coordination overhead |
+| Global Bootstrap | 5.0x | Root infrastructure, maximum reliability required |
+
+### Scripts Needed
+- `scripts/vernex-node-setup.sh` — exists, compute nodes ✓
+- `scripts/vernex-bootstrap-setup.sh` — TODO: regional/global bootstrap provisioning
+- `scripts/vernex-node-wipe.sh` — exists ✓
+
+### Patent Relevance
+Zero-configuration P2P connectivity via application-layer STUN/ICE-inspired hole punching
+combined with ML-DSA cryptographic trust establishment — novel in distributed compute context.
+Add as patent extension claim before March 24, 2027 non-provisional deadline.
+
+---
+
 ## Continuity Note for Claude Chat (paste at start of new session)
 *Vernex Protocol v0.8.0. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. ML-DSA enforcement is per-peer opt-in (add mldsa_public_key to peer config to activate). Next: deploy v0.8.0 on Node-2, exchange ML-DSA public keys, activate hybrid enforcement. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*
