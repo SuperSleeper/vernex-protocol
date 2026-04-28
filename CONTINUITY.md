@@ -9,10 +9,16 @@ v0.9.1
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | systemd auto-start |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | systemd auto-start — bootstrap node |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
 
 ## What Was Just Completed
+- Setup script bootstrap updated to public IP 76.244.40.49:7701
+- BOOTSTRAP_NODES now uses public IP so nodes on any network can join (not just LAN)
+- Generated config/node.json peer entry base_url now http://76.244.40.49:11434
+- Public key unchanged: prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I=
+
+## Previously Completed
 - Push-based status in heartbeat — remote nodes visible behind NAT
 - PeerEntry.PushedStatus json.RawMessage: stores last /status payload received on heartbeat
 - getOwnStatus(node *Node) statusResponse: builds full status response without HTTP round-trip

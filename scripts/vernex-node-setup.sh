@@ -36,7 +36,7 @@ VERSION="v0.7.0"
 # Add entries here as the network grows. Format: "IP:PORT" (port = API port 7701).
 # New nodes receive these as pre-configured peers and send a trust request to each.
 BOOTSTRAP_NODES=(
-  "172.17.0.132:7701"
+  "76.244.40.49:7701"
 )
 BOOTSTRAP_PUBKEYS=(
   "prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I="
