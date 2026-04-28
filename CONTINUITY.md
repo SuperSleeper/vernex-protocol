@@ -13,15 +13,15 @@ v0.9.1
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
 
 ## What Was Just Completed
-- mDNS local node discovery (v0.9.2)
-- github.com/hashicorp/mdns v1.0.6 added
-- mDNS service registration at startup: _vernex._tcp.local, TXT: node_id, pub_key, mldsa_pub, version
-- mDNS discovery goroutine: browses every 30s, parses TXT records
-- Trusted peers found via mDNS → registered directly into peerRegistry (connection_type: local)
-- Unknown peers found via mDNS → queued as trust requests (same flow as /trust-request)
-- connectionType(): mDNS-discovered peers also return "local" (alongside RFC1918 check)
-- mdnsDiscovered map[string]bool + mdnsDiscoveredMu on Node struct
-- Version bumped to v0.9.2
+- mDNS via avahi D-Bus (v0.9.2) — replaces hashicorp/mdns which conflicted with system avahi
+- hashicorp/mdns removed (go mod tidy); godbus/dbus already present — no new deps
+- registerMDNSViaAvahi(): EntryGroupNew → AddService → Commit via org.freedesktop.Avahi D-Bus API
+- TXT records: node_id, pub_key, version; registration session-scoped (D-Bus conn held in goroutine)
+- discoverAvahiPeers(): runs avahi-browse -r -t _vernex._tcp --parsable; 8s kill timeout
+- Parses =;iface;proto;name;type;domain;host;addr;port;txt lines; extracts node_id + pub_key from TXT
+- Discovery logic unchanged: trusted peers → peerRegistry, unknown → trustRequests queue
+- connectionType() mDNS-local classification unchanged
+- mdnsDiscovered map suppresses duplicate log lines
 - Setup script bootstrap updated to public IP 76.244.40.49:7701
 - BOOTSTRAP_NODES now uses public IP so nodes on any network can join (not just LAN)
 - Generated config/node.json peer entry base_url now http://76.244.40.49:11434

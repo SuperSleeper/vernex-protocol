@@ -32,7 +32,6 @@ import (
 	"github.com/cloudflare/circl/sign"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa44"
 	"github.com/godbus/dbus/v5"
-	"github.com/hashicorp/mdns"
 )
 
 var mldsaScheme = mldsa44.Scheme()
@@ -1296,6 +1295,108 @@ func signalPunch(targetAPIURL, punchIP string, punchPort int) error {
 	return nil
 }
 
+// registerMDNSViaAvahi registers this node as a _vernex._tcp service through the system
+// avahi daemon using the org.freedesktop.Avahi D-Bus API. The returned connection must
+// be kept open for the registration to remain active — it is tied to the D-Bus session.
+func registerMDNSViaAvahi(cfg NodeConfig, pubKeyB64 string) (*dbus.Conn, error) {
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return nil, fmt.Errorf("D-Bus connect: %w", err)
+	}
+	server := conn.Object("org.freedesktop.Avahi", "/")
+	var groupPath dbus.ObjectPath
+	if err := server.Call("org.freedesktop.Avahi.Server.EntryGroupNew", 0).Store(&groupPath); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("EntryGroupNew: %w", err)
+	}
+	group := conn.Object("org.freedesktop.Avahi", groupPath)
+	txtRecords := [][]byte{
+		[]byte("node_id=" + cfg.NodeID),
+		[]byte("pub_key=" + pubKeyB64),
+		[]byte("version=0.9.2"),
+	}
+	if err := group.Call("org.freedesktop.Avahi.EntryGroup.AddService", 0,
+		int32(-1), int32(-1), uint32(0),
+		cfg.NodeID, "_vernex._tcp", "", "",
+		uint16(cfg.APIPort),
+		txtRecords,
+	).Err; err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("AddService: %w", err)
+	}
+	if err := group.Call("org.freedesktop.Avahi.EntryGroup.Commit", 0).Err; err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("Commit: %w", err)
+	}
+	return conn, nil
+}
+
+// avahiPeer holds a single result from discoverAvahiPeers.
+type avahiPeer struct {
+	nodeID string
+	pubKey string
+	addr   string
+	port   int
+}
+
+// discoverAvahiPeers runs avahi-browse -r -t to find _vernex._tcp services on the LAN.
+// The -t flag makes avahi-browse terminate after the initial scan completes.
+// Output lines use the parsable format: =;iface;proto;name;type;domain;host;addr;port;txt
+func discoverAvahiPeers(ownNodeID string) []avahiPeer {
+	cmd := exec.Command("avahi-browse", "-r", "-t", "_vernex._tcp", "--parsable")
+	// Kill if avahi-browse hangs longer than 8 seconds
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-done:
+		case <-time.After(8 * time.Second):
+			if cmd.Process != nil {
+				cmd.Process.Kill() //nolint:errcheck
+			}
+		}
+	}()
+	out, _ := cmd.Output()
+	close(done)
+
+	var peers []avahiPeer
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "=") {
+			continue // only process resolved entries (= prefix)
+		}
+		// =;iface;proto;name;type;domain;hostname;addr;port[;txt...]
+		fields := strings.SplitN(line, ";", 10)
+		if len(fields) < 9 {
+			continue
+		}
+		addrStr := fields[7]
+		port, err := strconv.Atoi(fields[8])
+		if err != nil {
+			continue
+		}
+		// TXT records are space-separated quoted strings: "key=value" "key2=value2"
+		txt := make(map[string]string)
+		if len(fields) == 10 {
+			for _, part := range strings.Fields(fields[9]) {
+				part = strings.Trim(part, "\"")
+				if idx := strings.IndexByte(part, '='); idx > 0 {
+					txt[part[:idx]] = part[idx+1:]
+				}
+			}
+		}
+		nodeID := txt["node_id"]
+		if nodeID == "" || nodeID == ownNodeID {
+			continue
+		}
+		peers = append(peers, avahiPeer{
+			nodeID: nodeID,
+			pubKey: txt["pub_key"],
+			addr:   addrStr,
+			port:   port,
+		})
+	}
+	return peers
+}
+
 // peerAPIURL derives a peer's daemon API URL from its Ollama base_url by
 // replacing the port with 7701 and switching to https.
 func peerAPIURL(peer PeerNode) (string, error) {
@@ -1566,42 +1667,23 @@ func main() {
 		fmt.Printf("  [✓] Peer heartbeat goroutine started (%d peers)\n", len(cfg.PeerNodes))
 	}
 
-	// mDNS service registration — advertise this node as _vernex._tcp.local on the LAN.
-	// Other Vernex nodes on the same network discover us without needing the bootstrap.
+	// mDNS service registration via avahi D-Bus.
+	// Integrates with the system avahi daemon already running on Pop!_OS — no port conflict.
 	{
-		mldsaRaw, _ := node.mldsaPubKey.MarshalBinary()
-		txtRecords := []string{
-			"node_id=" + cfg.NodeID,
-			"pub_key=" + base64.StdEncoding.EncodeToString(node.publicKey),
-			"mldsa_pub=" + base64.StdEncoding.EncodeToString(mldsaRaw),
-			"version=0.9.2",
-		}
-		mdnsSvc, merr := mdns.NewMDNSService(
-			cfg.NodeID,    // instance name
-			"_vernex._tcp", // service type
-			"",            // domain (empty = .local)
-			"",            // host (empty = local hostname)
-			cfg.APIPort,   // port
-			nil,           // IPs (nil = all interfaces)
-			txtRecords,
-		)
+		pubKeyB64 := base64.StdEncoding.EncodeToString(node.publicKey)
+		avahiConn, merr := registerMDNSViaAvahi(cfg, pubKeyB64)
 		if merr != nil {
-			fmt.Printf("  [!] mDNS service create failed: %v\n", merr)
+			fmt.Printf("  [!] mDNS registration via avahi failed: %v (continuing without LAN advertisement)\n", merr)
 		} else {
-			mdnsServer, merr := mdns.NewServer(&mdns.Config{Zone: mdnsSvc})
-			if merr != nil {
-				fmt.Printf("  [!] mDNS server failed: %v\n", merr)
-			} else {
-				defer mdnsServer.Shutdown()
-				fmt.Println("  [✓] mDNS service registered (_vernex._tcp.local)")
-			}
+			fmt.Println("  [✓] mDNS service registered via avahi (_vernex._tcp.local)")
+			// Hold the D-Bus connection open for process lifetime — registration is session-scoped.
+			go func() { defer avahiConn.Close(); select {} }()
 		}
 	}
 
-	// mDNS discovery goroutine — browse for _vernex._tcp.local every 30 seconds.
+	// mDNS discovery goroutine — uses avahi-browse every 30 seconds.
 	// Finds peers on the same LAN without bootstrap involvement.
 	go func() {
-		// helper: check if nodeID is in our trusted config
 		isTrustedPeer := func(nodeID string) bool {
 			for _, p := range node.cfg.PeerNodes {
 				raw, err := base64.StdEncoding.DecodeString(p.PublicKey)
@@ -1616,74 +1698,46 @@ func main() {
 		}
 
 		for {
-			entryCh := make(chan *mdns.ServiceEntry, 16)
-			go func() {
-				params := &mdns.QueryParam{
-					Service:     "_vernex._tcp",
-					Domain:      "local",
-					Timeout:     3 * time.Second,
-					Entries:     entryCh,
-					DisableIPv6: true,
-				}
-				mdns.Query(params) //nolint:errcheck
-				close(entryCh)
-			}()
-
-			for entry := range entryCh {
-				// Parse TXT records into a map
-				txt := make(map[string]string)
-				for _, rec := range entry.InfoFields {
-					if idx := strings.IndexByte(rec, '='); idx > 0 {
-						txt[rec[:idx]] = rec[idx+1:]
-					}
-				}
-				peerID := txt["node_id"]
-				pubKeyB64 := txt["pub_key"]
-				if peerID == "" || peerID == cfg.NodeID {
-					continue // skip empty or self
-				}
-
-				peerAPIURL := fmt.Sprintf("https://%s:%d", entry.AddrV4, entry.Port)
+			for _, peer := range discoverAvahiPeers(cfg.NodeID) {
+				peerAPIURL := fmt.Sprintf("https://%s:%d", peer.addr, peer.port)
 
 				node.mdnsDiscoveredMu.Lock()
-				alreadyKnown := node.mdnsDiscovered[peerID]
-				node.mdnsDiscovered[peerID] = true
+				alreadyKnown := node.mdnsDiscovered[peer.nodeID]
+				node.mdnsDiscovered[peer.nodeID] = true
 				node.mdnsDiscoveredMu.Unlock()
 
-				if isTrustedPeer(peerID) {
-					// Trusted peer on LAN — register directly into peerRegistry
+				if isTrustedPeer(peer.nodeID) {
 					node.peerRegistry.Register(PeerEntry{
-						NodeID:   peerID,
+						NodeID:   peer.nodeID,
 						APIURL:   peerAPIURL,
 						LastSeen: time.Now(),
 					})
 					if !alreadyKnown {
-						fmt.Printf("  [✓] mDNS discovered trusted peer: %s at %s\n", peerID, peerAPIURL)
+						fmt.Printf("  [✓] mDNS discovered trusted peer: %s at %s\n", peer.nodeID, peerAPIURL)
 					}
 				} else {
-					// Unknown node — add to trust request queue (same flow as /trust-request)
-					entry := TrustRequest{
-						NodeID:      peerID,
-						PublicKey:   pubKeyB64,
+					tr := TrustRequest{
+						NodeID:      peer.nodeID,
+						PublicKey:   peer.pubKey,
 						APIUrl:      peerAPIURL,
 						RequestedAt: time.Now(),
-						SourceIP:    entry.AddrV4.String(),
+						SourceIP:    peer.addr,
 					}
 					node.trustMu.Lock()
 					replaced := false
 					for i := range node.trustRequests {
-						if node.trustRequests[i].NodeID == peerID {
-							node.trustRequests[i] = entry
+						if node.trustRequests[i].NodeID == peer.nodeID {
+							node.trustRequests[i] = tr
 							replaced = true
 							break
 						}
 					}
 					if !replaced {
-						node.trustRequests = append(node.trustRequests, entry)
+						node.trustRequests = append(node.trustRequests, tr)
 					}
 					node.trustMu.Unlock()
 					if !alreadyKnown {
-						fmt.Printf("  [↑] mDNS discovered unknown peer: %s at %s — trust request queued\n", peerID, peerAPIURL)
+						fmt.Printf("  [↑] mDNS discovered unknown peer: %s at %s — trust request queued\n", peer.nodeID, peerAPIURL)
 					}
 				}
 			}
@@ -1691,7 +1745,7 @@ func main() {
 			time.Sleep(30 * time.Second)
 		}
 	}()
-	fmt.Println("  [✓] mDNS discovery goroutine started (_vernex._tcp.local)")
+	fmt.Println("  [✓] mDNS discovery goroutine started (avahi-browse _vernex._tcp)")
 
 	// Start UDP listener on daemonPort for hole-punch packets (coexists with the TCP listener below).
 	// Single UDPConn handles both send (WriteToUDP) and receive (ReadFromUDP).
