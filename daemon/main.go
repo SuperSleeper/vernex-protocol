@@ -603,11 +603,12 @@ const peerLiveTTL = 90 * time.Second
 
 // PeerEntry is a node that has registered itself with this node.
 type PeerEntry struct {
-	NodeID       string    `json:"node_id"`
-	APIURL       string    `json:"api_url"`
-	ExternalIP   string    `json:"external_ip,omitempty"`
-	ExternalPort int       `json:"external_port,omitempty"`
-	LastSeen     time.Time `json:"last_seen"`
+	NodeID       string          `json:"node_id"`
+	APIURL       string          `json:"api_url"`
+	ExternalIP   string          `json:"external_ip,omitempty"`
+	ExternalPort int             `json:"external_port,omitempty"`
+	LastSeen     time.Time       `json:"last_seen"`
+	PushedStatus json.RawMessage `json:"pushed_status,omitempty"` // last /status payload pushed on heartbeat
 }
 
 // PeerRegistry holds in-memory heartbeat registrations from peer nodes.
@@ -914,6 +915,34 @@ func (n *Node) getStats() NodeStats {
 	s.UptimeSeconds = int64(time.Since(s.StartedAt).Seconds())
 	s.QueueDepth = n.scheduler.depth()
 	return s
+}
+
+// getOwnStatus builds a full statusResponse without an HTTP round-trip.
+// Used to embed own status in heartbeat payloads so bootstrap nodes see our stats
+// even when we're behind NAT and not directly reachable inbound.
+func getOwnStatus(n *Node) statusResponse {
+	pubIP, _ := n.cachedPublicIP.Load().(string)
+	extIP, _ := n.externalIP.Load().(string)
+	livePeers := n.peerRegistry.LivePeers()
+	directCount, localCount := 0, 0
+	for _, p := range livePeers {
+		switch n.connectionType(p) {
+		case "direct":
+			directCount++
+		case "local":
+			localCount++
+		}
+	}
+	return statusResponse{
+		NodeStats:    n.getStats(),
+		IPAddress:    outboundIP("8.8.8.8"),
+		Gateway:      defaultGateway(),
+		PublicIP:     pubIP,
+		ExternalIP:   extIP,
+		ExternalPort: int(n.externalPort.Load()),
+		DirectPeers:  directCount,
+		LocalPeers:   localCount,
+	}
 }
 
 func (n *Node) printBanner() {
@@ -1267,10 +1296,13 @@ func peerAPIURL(peer PeerNode) (string, error) {
 	return fmt.Sprintf("https://%s:7701", u.Hostname()), nil
 }
 
-// registerWithPeers POSTs our node_id, api_url, and external endpoint to each peer's
-// /register endpoint. Failures are logged but not fatal — peers will pick us up on the
-// next heartbeat. extIP/extPort are the STUN-discovered external address (may be empty).
-func registerWithPeers(cfg NodeConfig, ownAPIPort int, extIP string, extPort int) {
+// registerWithPeers POSTs our node_id, api_url, external endpoint, and current status
+// to each peer's /register endpoint. Failures are logged but not fatal — peers will pick
+// us up on the next heartbeat. extIP/extPort are the STUN-discovered external address (may be empty).
+func registerWithPeers(node *Node, extIP string, extPort int) {
+	cfg := node.cfg
+	ownAPIPort := cfg.APIPort
+	statusJSON, _ := json.Marshal(getOwnStatus(node))
 	for _, peer := range cfg.PeerNodes {
 		apiURL, err := peerAPIURL(peer)
 		if err != nil {
@@ -1292,6 +1324,7 @@ func registerWithPeers(cfg NodeConfig, ownAPIPort int, extIP string, extPort int
 			"api_url":       ownURL,
 			"external_ip":   extIP,
 			"external_port": extPort,
+			"status":        json.RawMessage(statusJSON),
 		})
 		client := &http.Client{
 			Timeout: 5 * time.Second,
@@ -1486,7 +1519,7 @@ func main() {
 			node.externalIP.Store(extIP)
 			node.externalPort.Store(int32(extPort))
 
-			registerWithPeers(node.cfg, node.cfg.APIPort, extIP, extPort)
+			registerWithPeers(node, extIP, extPort)
 
 			// Old UDP holes are tied to the previous IP — clear them so connectionType
 			// falls back to "relayed" until new holes are punched.
@@ -1513,11 +1546,11 @@ func main() {
 			} else {
 				fmt.Println("  [!] External endpoint: unknown (no bootstrap peer responded to /stun)")
 			}
-			registerWithPeers(cfg, cfg.APIPort, extIP, extPort)
+			registerWithPeers(node, extIP, extPort)
 			ticker := time.NewTicker(60 * time.Second)
 			for range ticker.C {
 				curIP, _ := node.externalIP.Load().(string)
-				registerWithPeers(cfg, cfg.APIPort, curIP, int(node.externalPort.Load()))
+				registerWithPeers(node, curIP, int(node.externalPort.Load()))
 			}
 		}()
 		fmt.Printf("  [✓] Peer heartbeat goroutine started (%d peers)\n", len(cfg.PeerNodes))
@@ -1862,7 +1895,7 @@ func main() {
 		})
 
 		// /register — peer heartbeat registration.
-		// Accepts {"node_id": "VRX-xxx", "api_url": "https://ip:7701", "external_ip": "...", "external_port": 12345}.
+		// Accepts node_id, api_url, external endpoint, and optional status (full /status payload).
 		// No signature required: registration is informational; trust is enforced at /submit.
 		http.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost {
@@ -1870,10 +1903,11 @@ func main() {
 				return
 			}
 			var req struct {
-				NodeID       string `json:"node_id"`
-				APIURL       string `json:"api_url"`
-				ExternalIP   string `json:"external_ip,omitempty"`
-				ExternalPort int    `json:"external_port,omitempty"`
+				NodeID       string          `json:"node_id"`
+				APIURL       string          `json:"api_url"`
+				ExternalIP   string          `json:"external_ip,omitempty"`
+				ExternalPort int             `json:"external_port,omitempty"`
+				Status       json.RawMessage `json:"status,omitempty"` // full /status payload pushed by peer
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -1889,6 +1923,7 @@ func main() {
 				ExternalIP:   req.ExternalIP,
 				ExternalPort: req.ExternalPort,
 				LastSeen:     time.Now(),
+				PushedStatus: req.Status,
 			})
 			fmt.Printf("  [↔] registered peer  id=%s  ext=%s:%d\n", req.NodeID, req.ExternalIP, req.ExternalPort)
 			w.Header().Set("Content-Type", "application/json")
@@ -2102,14 +2137,21 @@ func main() {
 				},
 			}
 			resp, err := client.Get(peer.APIURL + "/status")
-			if err != nil {
-				http.Error(w, fmt.Sprintf("peer unreachable: %v", err), http.StatusServiceUnavailable)
+			if err == nil {
+				defer resp.Body.Close()
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				io.Copy(w, resp.Body) //nolint:errcheck
 				return
 			}
-			defer resp.Body.Close()
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			io.Copy(w, resp.Body) //nolint:errcheck
+			// Direct fetch failed — serve the pushed status cached on last heartbeat.
+			if len(peer.PushedStatus) > 0 && time.Since(peer.LastSeen) < peerLiveTTL {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				w.Write(peer.PushedStatus) //nolint:errcheck
+				return
+			}
+			http.Error(w, fmt.Sprintf("peer unreachable and no cached status: %v", err), http.StatusServiceUnavailable)
 		})
 
 		// /punch-request — bootstrap coordination endpoint.

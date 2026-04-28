@@ -13,6 +13,15 @@ v0.9.1
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
 
 ## What Was Just Completed
+- Push-based status in heartbeat — remote nodes visible behind NAT
+- PeerEntry.PushedStatus json.RawMessage: stores last /status payload received on heartbeat
+- getOwnStatus(node *Node) statusResponse: builds full status response without HTTP round-trip
+- registerWithPeers() signature changed to (node *Node, extIP, extPort) — derives cfg internally
+- Heartbeat payload now includes "status": full statusResponse JSON
+- /register handler: accepts status json.RawMessage, stores in PeerEntry.PushedStatus
+- /peer-status/{node_id}: tries direct fetch first; falls back to PushedStatus if within peerLiveTTL; 503 only if both unavailable
+
+## Previously Completed
 - Relay status polling for remote nodes via bootstrap proxy
 - /peer-status/{node_id} endpoint: proxies /status to a registered peer's api_url; 503 if unreachable
 - dashboard index(): direct poll with 1s timeout for remote nodes, falls back to /peer-status/{node_id} relay
