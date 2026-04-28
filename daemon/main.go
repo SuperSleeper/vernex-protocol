@@ -32,6 +32,7 @@ import (
 	"github.com/cloudflare/circl/sign"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa44"
 	"github.com/godbus/dbus/v5"
+	"github.com/hashicorp/mdns"
 )
 
 var mldsaScheme = mldsa44.Scheme()
@@ -728,6 +729,8 @@ type Node struct {
 	udpConn          *net.UDPConn  // single UDP socket on daemonPort for hole punching
 	lastLANIP        atomic.Value  // string; last known LAN IP — watchdog detects changes
 	lastPublicIP     atomic.Value  // string; last known public IP — watchdog detects changes
+	mdnsDiscovered   map[string]bool // node_id → true if found via mDNS browse
+	mdnsDiscoveredMu sync.RWMutex
 }
 
 // statusResponse is the /status payload. It embeds the static NodeStats fields
@@ -882,13 +885,14 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 		peerRegistry:     NewPeerRegistry(),
 		trustRateLimiter: NewRateLimiter(3, 60*time.Minute),
 		peerHoles:        make(map[string]*net.UDPAddr),
+		mdnsDiscovered:   make(map[string]bool),
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.9.1",
+			Version:           "0.9.2",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -949,7 +953,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.9.1  — Patent Pending       ║")
+	fmt.Println("║       v0.9.2  — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Ed25519   : %s\n", base64.StdEncoding.EncodeToString(n.publicKey))
@@ -969,11 +973,17 @@ func (n *Node) printBanner() {
 }
 
 // connectionType returns "local", "direct", or "relayed" for a registered peer.
-// "local"   — peer API URL resolves to a private/loopback address (same LAN, no NAT needed).
+// "local"   — peer API URL resolves to a private/loopback address, OR discovered via mDNS.
 // "direct"  — a VERNEX-PUNCH UDP packet was received from this peer's external address.
 // "relayed" — connection falls through the TCP daemon relay; hole punch not yet confirmed.
 func (n *Node) connectionType(peer PeerEntry) string {
 	if u, err := url.Parse(peer.APIURL); err == nil && isPrivateIP(u.Hostname()) {
+		return "local"
+	}
+	n.mdnsDiscoveredMu.RLock()
+	_, viaLAN := n.mdnsDiscovered[peer.NodeID]
+	n.mdnsDiscoveredMu.RUnlock()
+	if viaLAN {
 		return "local"
 	}
 	n.peerHolesMu.RLock()
@@ -1555,6 +1565,133 @@ func main() {
 		}()
 		fmt.Printf("  [✓] Peer heartbeat goroutine started (%d peers)\n", len(cfg.PeerNodes))
 	}
+
+	// mDNS service registration — advertise this node as _vernex._tcp.local on the LAN.
+	// Other Vernex nodes on the same network discover us without needing the bootstrap.
+	{
+		mldsaRaw, _ := node.mldsaPubKey.MarshalBinary()
+		txtRecords := []string{
+			"node_id=" + cfg.NodeID,
+			"pub_key=" + base64.StdEncoding.EncodeToString(node.publicKey),
+			"mldsa_pub=" + base64.StdEncoding.EncodeToString(mldsaRaw),
+			"version=0.9.2",
+		}
+		mdnsSvc, merr := mdns.NewMDNSService(
+			cfg.NodeID,    // instance name
+			"_vernex._tcp", // service type
+			"",            // domain (empty = .local)
+			"",            // host (empty = local hostname)
+			cfg.APIPort,   // port
+			nil,           // IPs (nil = all interfaces)
+			txtRecords,
+		)
+		if merr != nil {
+			fmt.Printf("  [!] mDNS service create failed: %v\n", merr)
+		} else {
+			mdnsServer, merr := mdns.NewServer(&mdns.Config{Zone: mdnsSvc})
+			if merr != nil {
+				fmt.Printf("  [!] mDNS server failed: %v\n", merr)
+			} else {
+				defer mdnsServer.Shutdown()
+				fmt.Println("  [✓] mDNS service registered (_vernex._tcp.local)")
+			}
+		}
+	}
+
+	// mDNS discovery goroutine — browse for _vernex._tcp.local every 30 seconds.
+	// Finds peers on the same LAN without bootstrap involvement.
+	go func() {
+		// helper: check if nodeID is in our trusted config
+		isTrustedPeer := func(nodeID string) bool {
+			for _, p := range node.cfg.PeerNodes {
+				raw, err := base64.StdEncoding.DecodeString(p.PublicKey)
+				if err != nil || len(raw) != 32 {
+					continue
+				}
+				if nodeIDFromPublicKey(ed25519.PublicKey(raw)) == nodeID {
+					return true
+				}
+			}
+			return false
+		}
+
+		for {
+			entryCh := make(chan *mdns.ServiceEntry, 16)
+			go func() {
+				params := &mdns.QueryParam{
+					Service:     "_vernex._tcp",
+					Domain:      "local",
+					Timeout:     3 * time.Second,
+					Entries:     entryCh,
+					DisableIPv6: true,
+				}
+				mdns.Query(params) //nolint:errcheck
+				close(entryCh)
+			}()
+
+			for entry := range entryCh {
+				// Parse TXT records into a map
+				txt := make(map[string]string)
+				for _, rec := range entry.InfoFields {
+					if idx := strings.IndexByte(rec, '='); idx > 0 {
+						txt[rec[:idx]] = rec[idx+1:]
+					}
+				}
+				peerID := txt["node_id"]
+				pubKeyB64 := txt["pub_key"]
+				if peerID == "" || peerID == cfg.NodeID {
+					continue // skip empty or self
+				}
+
+				peerAPIURL := fmt.Sprintf("https://%s:%d", entry.AddrV4, entry.Port)
+
+				node.mdnsDiscoveredMu.Lock()
+				alreadyKnown := node.mdnsDiscovered[peerID]
+				node.mdnsDiscovered[peerID] = true
+				node.mdnsDiscoveredMu.Unlock()
+
+				if isTrustedPeer(peerID) {
+					// Trusted peer on LAN — register directly into peerRegistry
+					node.peerRegistry.Register(PeerEntry{
+						NodeID:   peerID,
+						APIURL:   peerAPIURL,
+						LastSeen: time.Now(),
+					})
+					if !alreadyKnown {
+						fmt.Printf("  [✓] mDNS discovered trusted peer: %s at %s\n", peerID, peerAPIURL)
+					}
+				} else {
+					// Unknown node — add to trust request queue (same flow as /trust-request)
+					entry := TrustRequest{
+						NodeID:      peerID,
+						PublicKey:   pubKeyB64,
+						APIUrl:      peerAPIURL,
+						RequestedAt: time.Now(),
+						SourceIP:    entry.AddrV4.String(),
+					}
+					node.trustMu.Lock()
+					replaced := false
+					for i := range node.trustRequests {
+						if node.trustRequests[i].NodeID == peerID {
+							node.trustRequests[i] = entry
+							replaced = true
+							break
+						}
+					}
+					if !replaced {
+						node.trustRequests = append(node.trustRequests, entry)
+					}
+					node.trustMu.Unlock()
+					if !alreadyKnown {
+						fmt.Printf("  [↑] mDNS discovered unknown peer: %s at %s — trust request queued\n", peerID, peerAPIURL)
+					}
+				}
+			}
+
+			time.Sleep(30 * time.Second)
+		}
+	}()
+	fmt.Println("  [✓] mDNS discovery goroutine started (_vernex._tcp.local)")
 
 	// Start UDP listener on daemonPort for hole-punch packets (coexists with the TCP listener below).
 	// Single UDPConn handles both send (WriteToUDP) and receive (ReadFromUDP).
