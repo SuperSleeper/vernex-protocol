@@ -908,7 +908,7 @@ func NewNode(cfg NodeConfig, configDir string, privKey ed25519.PrivateKey, pubKe
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.10.0",
+			Version:           "0.11.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -975,7 +975,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.10.0 — Patent Pending       ║")
+	fmt.Println("║       v0.11.0 — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Ed25519   : %s\n", base64.StdEncoding.EncodeToString(n.publicKey))
@@ -1326,7 +1326,7 @@ func registerMDNSViaAvahi(cfg NodeConfig, pubKeyB64 string) (*dbus.Conn, error) 
 	txtRecords := [][]byte{
 		[]byte("node_id=" + cfg.NodeID),
 		[]byte("pub_key=" + pubKeyB64),
-		[]byte("version=0.9.2"),
+		[]byte("version=0.11.0"),
 	}
 	if err := group.Call("org.freedesktop.Avahi.EntryGroup.AddService", 0,
 		int32(-1), int32(-1), uint32(0),

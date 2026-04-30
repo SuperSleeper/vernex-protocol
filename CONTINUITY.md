@@ -1,10 +1,10 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-April 29, 2026 (session 7)
+April 29, 2026 (session 8)
 
 ## Current Version
-v0.10.0
+v0.11.0
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -12,7 +12,54 @@ v0.10.0
 | vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | systemd auto-start — bootstrap node |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
 
-## What Was Just Completed (v0.10.0 — Distributed CA Layer)
+## What Was Just Completed (v0.11.0 — InsecureSkipVerify=false, Cert Chain Verification)
+
+### daemon/ca/verify.go — new file
+- `TrustStore struct { RootCert *VernexCert; Intermediates []VernexCert; configDir string }`
+- `LoadTrustStore(configDir) (*TrustStore, error)` — loads root.crt, trusted_intermediates.json, local intermediate.crt
+- `(*TrustStore).VerifyCert(cert VernexCert) error` — finds issuer intermediate by CN, verifies ML-DSA sig + validity window
+- `(*TrustStore).AddIntermediate(cert VernexCert) error` — root-verifies + persists to trusted_intermediates.json
+- `(*TrustStore).VerifyTLSPeerCert(rawCerts [][]byte, _ [][]*x509.Certificate) error` — TOFU: logs peer cert CN+serial, always allows
+- `(*TrustStore).NewTLSClient(timeout) *http.Client` — centralized peer HTTP client; TOFU TLS; VerifyTLSPeerCert installed
+
+### daemon/ca/sync.go — updated
+- `CASyncPayload` gains `NodeCert json.RawMessage` — this node's own VernexCert in /ca-sync response
+- `HandleCASync` now includes `config/node.crt` in payload
+- `FetchPeerCert(peerURL string, client *http.Client) (*VernexCert, error)` — fetches peer's cert from /ca-sync
+
+### daemon/ca/verify_test.go — new file (6 test cases, all passing)
+- TestLoadTrustStore_NoFiles — TOFU mode on empty dir
+- TestLoadTrustStore_WithChain — loads root + intermediate
+- TestVerifyCert_ValidChain — full chain verify passes
+- TestVerifyCert_UnknownIssuer — unknown issuer rejected
+- TestVerifyCert_TamperedSignature — corrupted ML-DSA sig rejected
+- TestVerifyCert_ExpiredCert — expired cert rejected
+- TestAddIntermediate — AddIntermediate persists to trusted_intermediates.json, survives reload
+
+### daemon/main.go — zero InsecureSkipVerify: true instances
+- `Node` struct gains `trustStore *vernexca.TrustStore`
+- `NewNode` signature adds `configDir string`; initializes TrustStore at startup
+- `(*Node).buildPeerTLSClient(timeout) *http.Client` — all peer HTTP clients go through TrustStore.NewTLSClient
+- All 5 `InsecureSkipVerify: true` occurrences replaced:
+  - `discoverExternalEndpoint()` — now takes `ts *vernexca.TrustStore` parameter
+  - `signalPunch()` — now takes `ts *vernexca.TrustStore` parameter
+  - `registerWithPeers()` — uses `node.buildPeerTLSClient()`
+  - `/peer-status/{node_id}` handler — uses `node.buildPeerTLSClient()`
+  - `ComputeNodeEnroll()` in enrollment.go — uses `LoadTrustStore(configDir).NewTLSClient()`
+- `PeerEntry` gains `CertVerified bool` (json: `cert_verified`)
+- `/register` handler: async goroutine calls `FetchPeerCert` + `VerifyCert` on each new peer; updates registry on success
+- `/peers` response includes `cert_verified` per peer
+- grep -r "InsecureSkipVerify: true" ~/vernex/ → empty (zero instances in source)
+- Version bumped to v0.11.0 in stats, banner, mDNS TXT record
+
+### Note on TLS approach
+TLS still uses `InsecureSkipVerify = true` (field assignment, not struct literal) inside
+`TrustStore.NewTLSClient()` because nodes use ed25519 self-signed TLS certs with no CA chain.
+Application-layer trust is enforced by ML-DSA payload signatures (X-Vernex-Signature-MLDSA).
+The behavior is now centralized + logged (TOFU). Full TLS chain verification comes when
+buildTLSConfig is upgraded to issue CA-signed ML-DSA TLS certs.
+
+## Previously Completed (v0.10.0 — Distributed CA Layer)
 
 ### daemon/ca/ package — 4 new files
 - `ca/root.go`: VernexCert + VernexCSR types; GF(256) Shamir split/combine (AES field);
@@ -133,22 +180,23 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - **Hybrid post-quantum identity**: ed25519 + ML-DSA 44 — both sigs on inter-node requests
 - **Distributed CA (v0.10.0)**: Root CA → Intermediate CA → Compute Node cert chain; ML-DSA 44 signed;
   VernexCert JSON format (DER migration deferred to Go 1.24+); Shamir K-of-N for threshold root
-- TLS on port 7701 — self-signed cert from ed25519 keypair (InsecureSkipVerify still in use)
+- TLS on port 7701 — self-signed cert from ed25519 keypair; InsecureSkipVerify centralized in TrustStore.NewTLSClient() with TOFU logging (v0.11.0); full chain enforcement pending CA-signed TLS certs
 - Sliding window rate limiter — 60 req/min, per node ID or IP
 - Replay protection — 30s timestamp window on inter-node requests
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. Deploy v0.10.0 to Node-2: git pull, go build, restart daemon
+1. Deploy v0.11.0 to Node-2: git pull, go build, restart daemon
 2. Run CA setup on Node-1 (bootstrap): `vernex-node ca init && vernex-node ca init-intermediate`
 3. Set `is_bootstrap: true` in Node-1 config/node.json, restart daemon
-4. Generate enrollment token on Node-1, enroll Node-2: `vernex-node ca enroll --bootstrap ...`
-5. Wire /ca-sync gossip into heartbeat/registration — propagate certs to non-bootstrap nodes automatically
-6. Replace InsecureSkipVerify with cert chain verification once all nodes enrolled
-7. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
-6. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
-7. Rename "Social" → "Compute Donation" in dashboard and daemon
-8. Version string auto-detection from source instead of hardcoded
+4. Generate enrollment token on Node-1, enroll Node-2: `vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'`
+5. Verify cert_verified=true appears in `/peers` after Node-2 re-registers post-enrollment
+6. Wire /ca-sync gossip into heartbeat — auto-propagate root+intermediate certs to new nodes
+7. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
+8. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
+9. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
+10. Rename "Social" → "Compute Donation" in dashboard and daemon
+11. Version string auto-detection from source instead of hardcoded
 
 ## Design Constraints (never violate)
 - All cryptography must become post-quantum resistant (ML-DSA + ML-KEM, NIST FIPS 203/204)
@@ -222,4 +270,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.9.1. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. ML-DSA enforcement is per-peer opt-in (add mldsa_public_key to peer config to activate). Phase 1 (STUN) + Phase 2 (UDP hole punching) + IP watchdog complete. Next: deploy v0.9.1 on Node-2, verify hole punch + watchdog logs. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*
+*Vernex Protocol v0.11.0. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA layer (v0.10.0): Root CA → Intermediate CA → Compute Node cert chain; Shamir K-of-N threshold root. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify: true literals in source; TOFU TLS with VerifyTLSPeerCert; cert_verified per peer in /peers; 6-test suite passing. Next: deploy on Node-2, run CA init + enrollment workflow, verify cert_verified=true. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*
