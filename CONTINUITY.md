@@ -1,10 +1,10 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-April 27, 2026 (session 6)
+April 29, 2026 (session 7)
 
 ## Current Version
-v0.9.1
+v0.10.0
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -12,20 +12,55 @@ v0.9.1
 | vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | systemd auto-start — bootstrap node |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
 
-## What Was Just Completed
+## What Was Just Completed (v0.10.0 — Distributed CA Layer)
+
+### daemon/ca/ package — 4 new files
+- `ca/root.go`: VernexCert + VernexCSR types; GF(256) Shamir split/combine (AES field);
+  RootCA struct with GenerateRootCA / LoadRootCA / LoadRootCAFromShares / SignIntermediateCSR
+- `ca/intermediate.go`: IntermediateCA with GenerateIntermediateCA / LoadIntermediateCA /
+  SignComputeNodeCSR; VernexCSR self-sign + verify; UnmarshalPublicKey helper
+- `ca/enrollment.go`: EnrollmentToken (GenerateEnrollmentToken / VerifyEnrollmentToken /
+  BurnEnrollmentToken / ComputeNodeEnroll); used_tokens.json burn-on-use registry
+- `ca/sync.go`: HandleCASync HTTP handler + PullCASync gossip pull with chain validation
+
+### VernexCert format (application-layer ML-DSA X.509-like certs)
+- JSON-encoded credential with X.509-like fields: CN, O, OU, validity, SAN extensions
+- All CA keys ML-DSA 44 (cloudflare/circl, already in go.mod)
+- Signatures: ML-DSA over canonical TBS JSON (excluding Signature field)
+- Self-signed root cert → root signs intermediate → intermediate signs compute nodes
+- Chain verified end-to-end: root self-signed PASS, intermediate chain PASS
+- Note: JSON format (not DER X.509) — Go 1.22 stdlib doesn't support ML-DSA in x509.
+  Will migrate to DER when Go 1.24+ adds native ML-DSA x509 support.
+
+### CLI subcommands added (vernex-node ca <sub>)
+- `ca init` — generates root CA (single mode: saves root.key; threshold mode: Shamir shares to stdout)
+- `ca init-intermediate` — generates intermediate CA keypair + CSR, signs with local root
+- `ca token [network-id]` — generates enrollment token (is_bootstrap=true required)
+- `ca enroll --bootstrap <url> --token '<json>'` — enrolls compute node, replaces ML-DSA keypair
+
+### HTTP endpoints (daemon)
+- `GET /ca-sync` — gossip: returns root.crt + intermediate.crt (all nodes)
+- `POST /sign-intermediate` — bootstrap only: root signs intermediate CSR
+- `POST /enroll` — bootstrap only: intermediate signs compute node CSR with token
+- `POST /token-gen` — bootstrap + localhost only: generates enrollment token via API
+
+### NodeConfig additions (STEP 1)
+- `is_bootstrap bool` — enables /sign-intermediate, /enroll, /token-gen
+- `ca_mode string` — "single" (default) or "threshold"
+- `ca_threshold_k int` — Shamir shares required (default 3)
+- `ca_threshold_n int` — Shamir total shares (default 5)
+
+### Bootstrap CA setup workflow (Node-1, single mode)
+```bash
+vernex-node ca init               # creates config/root.{key,crt}
+vernex-node ca init-intermediate  # creates config/intermediate.{key,csr,crt}
+vernex-node ca token              # prints 30-day enrollment token
+# share token with new node operator; they run:
+vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
+```
+
+### Previously Completed
 - mDNS via avahi D-Bus (v0.9.2) — replaces hashicorp/mdns which conflicted with system avahi
-- hashicorp/mdns removed (go mod tidy); godbus/dbus already present — no new deps
-- registerMDNSViaAvahi(): EntryGroupNew → AddService → Commit via org.freedesktop.Avahi D-Bus API
-- TXT records: node_id, pub_key, version; registration session-scoped (D-Bus conn held in goroutine)
-- discoverAvahiPeers(): runs avahi-browse -r -t _vernex._tcp --parsable; 8s kill timeout
-- Parses =;iface;proto;name;type;domain;host;addr;port;txt lines; extracts node_id + pub_key from TXT
-- Discovery logic unchanged: trusted peers → peerRegistry, unknown → trustRequests queue
-- connectionType() mDNS-local classification unchanged
-- mdnsDiscovered map suppresses duplicate log lines
-- Setup script bootstrap updated to public IP 76.244.40.49:7701
-- BOOTSTRAP_NODES now uses public IP so nodes on any network can join (not just LAN)
-- Generated config/node.json peer entry base_url now http://76.244.40.49:11434
-- Public key unchanged: prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I=
 
 ## Previously Completed
 - Push-based status in heartbeat — remote nodes visible behind NAT
@@ -96,19 +131,21 @@ v0.9.1
 
 ## Security Stack (in place)
 - **Hybrid post-quantum identity**: ed25519 + ML-DSA 44 — both sigs on inter-node requests
-- TLS on port 7701 — self-signed cert from ed25519 keypair (ML-DSA in X.509 deferred to distributed CA)
+- **Distributed CA (v0.10.0)**: Root CA → Intermediate CA → Compute Node cert chain; ML-DSA 44 signed;
+  VernexCert JSON format (DER migration deferred to Go 1.24+); Shamir K-of-N for threshold root
+- TLS on port 7701 — self-signed cert from ed25519 keypair (InsecureSkipVerify still in use)
 - Sliding window rate limiter — 60 req/min, per node ID or IP
 - Replay protection — 30s timestamp window on inter-node requests
 - Trust request approval — operator must approve new node public keys via dashboard
-- InsecureSkipVerify TEMPORARY — pending distributed CA (replaces after ML-DSA CA phase)
 
 ## Immediate Next Steps (in priority order)
-1. Deploy v0.9.1 to Node-2: git pull, go build, restart daemon
-2. Verify /stun returns correct external IPs on both nodes
-3. Exchange ML-DSA public keys: copy node.mldsa.pub from each node into the other's peer_nodes[].mldsa_public_key in config — activates hybrid enforcement
-4. Test hole punching: watch for [✓] UDP hole punched in daemon logs after both nodes restart
-5. Test IP watchdog: change network on one node, watch for [→] IP change detected + [✓] Re-registered
-5. Distributed CA — threshold-signed, no single point of failure (ML-DSA certs in X.509)
+1. Deploy v0.10.0 to Node-2: git pull, go build, restart daemon
+2. Run CA setup on Node-1 (bootstrap): `vernex-node ca init && vernex-node ca init-intermediate`
+3. Set `is_bootstrap: true` in Node-1 config/node.json, restart daemon
+4. Generate enrollment token on Node-1, enroll Node-2: `vernex-node ca enroll --bootstrap ...`
+5. Wire /ca-sync gossip into heartbeat/registration — propagate certs to non-bootstrap nodes automatically
+6. Replace InsecureSkipVerify with cert chain verification once all nodes enrolled
+7. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
 6. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
 7. Rename "Social" → "Compute Donation" in dashboard and daemon
 8. Version string auto-detection from source instead of hardcoded
@@ -144,6 +181,10 @@ claude  # Claude Code reads CLAUDE.md + CONTINUITY.md automatically
 curl -sk https://localhost:7701/status | jq '{version, node_id}'
 curl -sk https://172.17.0.182:7701/status | jq '{version, node_id}'
 curl -sk https://localhost:7701/peers | jq .
+
+# Check CA status
+ls ~/vernex/config/*.{key,crt,csr} 2>/dev/null
+curl -sk https://localhost:7701/ca-sync | jq '{root_present: (.root_cert != null), int_present: (.intermediate_cert != null)}'
 ```
 
 ## Planned Architecture — Bootstrap Node Tier
