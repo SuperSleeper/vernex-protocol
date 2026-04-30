@@ -3,7 +3,6 @@ package ca
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -173,12 +172,8 @@ func ComputeNodeEnroll(bootstrapURL string, token EnrollmentToken, nodeID, confi
 		return err
 	}
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
-		},
-	}
+	ts, _ := LoadTrustStore(configDir)
+	client := ts.NewTLSClient(30 * time.Second)
 	resp, err := client.Post(bootstrapURL+"/enroll", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("POST /enroll to %s: %w", bootstrapURL, err)

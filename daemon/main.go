@@ -740,6 +740,7 @@ type Node struct {
 	lastPublicIP     atomic.Value  // string; last known public IP — watchdog detects changes
 	mdnsDiscovered   map[string]bool // node_id → true if found via mDNS browse
 	mdnsDiscoveredMu sync.RWMutex
+	trustStore       *vernexca.TrustStore
 }
 
 // statusResponse is the /status payload. It embeds the static NodeStats fields
@@ -875,11 +876,15 @@ func needsWebSearch(prompt string) (bool, string) {
 	return false, ""
 }
 
-func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKey, mldsaPrivKey sign.PrivateKey, mldsaPubKey sign.PublicKey) *Node {
+func NewNode(cfg NodeConfig, configDir string, privKey ed25519.PrivateKey, pubKey ed25519.PublicKey, mldsaPrivKey sign.PrivateKey, mldsaPubKey sign.PublicKey) *Node {
 	hostname, _ := os.Hostname()
 	limit := cfg.RateLimitPerMin
 	if limit <= 0 {
 		limit = 60
+	}
+	ts, tsErr := vernexca.LoadTrustStore(configDir)
+	if tsErr != nil {
+		fmt.Printf("  [!] TrustStore load warning: %v\n", tsErr)
 	}
 	n := &Node{
 		cfg:              cfg,
@@ -895,6 +900,7 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 		trustRateLimiter: NewRateLimiter(3, 60*time.Minute),
 		peerHoles:        make(map[string]*net.UDPAddr),
 		mdnsDiscovered:   make(map[string]bool),
+		trustStore: ts,
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
@@ -912,6 +918,12 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 	n.lastLANIP.Store(outboundIP("8.8.8.8"))
 	n.lastPublicIP.Store(initialPublicIP)
 	return n
+}
+
+// buildPeerTLSClient returns an http.Client for inter-node calls using the node's
+// TrustStore for TOFU TLS verification. Centralizes all peer HTTP client construction.
+func (n *Node) buildPeerTLSClient(timeout time.Duration) *http.Client {
+	return n.trustStore.NewTLSClient(timeout)
 }
 
 func (n *Node) recordConnection() {
@@ -1025,7 +1037,7 @@ func (n *Node) initiatePunch(peer PeerEntry) {
 	extIP, _ := n.externalIP.Load().(string)
 	extPort := int(n.externalPort.Load())
 	go func() {
-		if err := signalPunch(peer.APIURL, extIP, extPort); err != nil {
+		if err := signalPunch(peer.APIURL, extIP, extPort, n.trustStore); err != nil {
 			fmt.Printf("  [!] punch-signal → %s failed: %v\n", peer.NodeID, err)
 		}
 	}()
@@ -1240,13 +1252,8 @@ type stunResponse struct {
 // the first successful response. This reveals the node's external IP:port as seen
 // through NAT — the foundation for UDP hole punching (Phase 2).
 // Returns ("", 0) if no peer responds.
-func discoverExternalEndpoint(cfg NodeConfig) (string, int) {
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
-		},
-	}
+func discoverExternalEndpoint(cfg NodeConfig, ts *vernexca.TrustStore) (string, int) {
+	client := ts.NewTLSClient(5 * time.Second)
 	for _, peer := range cfg.PeerNodes {
 		apiURL, err := peerAPIURL(peer)
 		if err != nil {
@@ -1286,17 +1293,12 @@ func isPrivateIP(ip string) bool {
 
 // signalPunch sends a /punch-signal to targetAPIURL, instructing that node to initiate
 // UDP hole punching toward punchIP:punchPort simultaneously.
-func signalPunch(targetAPIURL, punchIP string, punchPort int) error {
+func signalPunch(targetAPIURL, punchIP string, punchPort int, ts *vernexca.TrustStore) error {
 	payload, _ := json.Marshal(map[string]any{
 		"punch_ip":   punchIP,
 		"punch_port": punchPort,
 	})
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
-		},
-	}
+	client := ts.NewTLSClient(5 * time.Second)
 	resp, err := client.Post(targetAPIURL+"/punch-signal", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return err
@@ -1447,12 +1449,7 @@ func registerWithPeers(node *Node, extIP string, extPort int) {
 			"external_port": extPort,
 			"status":        json.RawMessage(statusJSON),
 		})
-		client := &http.Client{
-			Timeout: 5 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
-			},
-		}
+		client := node.buildPeerTLSClient(5 * time.Second)
 		resp, err := client.Post(apiURL+"/register", "application/json", bytes.NewReader(payload))
 		if err != nil {
 			fmt.Printf("  [!] heartbeat: could not reach %s (%s): %v\n", peer.Name, apiURL, err)
@@ -1676,7 +1673,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	node := NewNode(cfg, privKey, pubKey, mldsaPrivKey, mldsaPubKey)
+	node := NewNode(cfg, configDir, privKey, pubKey, mldsaPrivKey, mldsaPubKey)
 	node.printBanner()
 
 	// Take sleep/idle inhibitor lock via systemd-logind
@@ -1783,7 +1780,7 @@ func main() {
 			node.lastLANIP.Store(curLAN)
 			node.lastPublicIP.Store(curPublic)
 
-			extIP, extPort := discoverExternalEndpoint(node.cfg)
+			extIP, extPort := discoverExternalEndpoint(node.cfg, node.trustStore)
 			node.externalIP.Store(extIP)
 			node.externalPort.Store(int32(extPort))
 
@@ -1806,7 +1803,7 @@ func main() {
 		go func() {
 			// Brief delay so our own HTTP server is ready before we hit peers.
 			time.Sleep(2 * time.Second)
-			extIP, extPort := discoverExternalEndpoint(cfg)
+			extIP, extPort := discoverExternalEndpoint(cfg, node.trustStore)
 			node.externalIP.Store(extIP)
 			node.externalPort.Store(int32(extPort))
 			if extIP != "" {
@@ -2478,12 +2475,7 @@ func main() {
 				http.Error(w, "peer not registered", http.StatusNotFound)
 				return
 			}
-			client := &http.Client{
-				Timeout: 3 * time.Second,
-				Transport: &http.Transport{
-					TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
-				},
-			}
+			client := node.buildPeerTLSClient(3 * time.Second)
 			resp, err := client.Get(peer.APIURL + "/status")
 			if err == nil {
 				defer resp.Body.Close()
@@ -2524,12 +2516,12 @@ func main() {
 				return
 			}
 			go func() {
-				if err := signalPunch(initiator.APIURL, target.ExternalIP, target.ExternalPort); err != nil {
+				if err := signalPunch(initiator.APIURL, target.ExternalIP, target.ExternalPort, node.trustStore); err != nil {
 					fmt.Printf("  [!] punch-request: signal to initiator %s failed: %v\n", req.InitiatorID, err)
 				}
 			}()
 			go func() {
-				if err := signalPunch(target.APIURL, initiator.ExternalIP, initiator.ExternalPort); err != nil {
+				if err := signalPunch(target.APIURL, initiator.ExternalIP, initiator.ExternalPort, node.trustStore); err != nil {
 					fmt.Printf("  [!] punch-request: signal to target %s failed: %v\n", req.TargetID, err)
 				}
 			}()
