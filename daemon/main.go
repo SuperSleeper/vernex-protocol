@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"math/big"
@@ -32,6 +33,8 @@ import (
 	"github.com/cloudflare/circl/sign"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa44"
 	"github.com/godbus/dbus/v5"
+
+	vernexca "vernex/daemon/ca"
 )
 
 var mldsaScheme = mldsa44.Scheme()
@@ -52,8 +55,12 @@ type NodeConfig struct {
 	APIPort              int        `json:"api_port"`
 	DashboardPort        int        `json:"dashboard_port"`
 	RateLimitPerMin      int        `json:"rate_limit_per_min"`
-	BraveAPIKey          string     `json:"brave_api_key,omitempty"` // Brave Search API key; omitted from config if empty
+	BraveAPIKey          string     `json:"brave_api_key,omitempty"`  // Brave Search API key; omitted from config if empty
 	PeerNodes            []PeerNode `json:"peer_nodes,omitempty"`
+	IsBootstrap          bool       `json:"is_bootstrap,omitempty"`   // true on bootstrap/root CA nodes
+	CAMode               string     `json:"ca_mode,omitempty"`        // "single" or "threshold" — default "single"
+	CAThresholdK         int        `json:"ca_threshold_k,omitempty"` // Shamir shares required (default 3)
+	CAThresholdN         int        `json:"ca_threshold_n,omitempty"` // Shamir total shares (default 5)
 }
 
 func loadConfig() NodeConfig {
@@ -64,6 +71,9 @@ func loadConfig() NodeConfig {
 		APIPort:              7701,
 		DashboardPort:        5000,
 		RateLimitPerMin:      60,
+		CAMode:               "single",
+		CAThresholdK:         3,
+		CAThresholdN:         5,
 	}
 
 	home, err := os.UserHomeDir()
@@ -891,7 +901,7 @@ func NewNode(cfg NodeConfig, privKey ed25519.PrivateKey, pubKey ed25519.PublicKe
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.9.2",
+			Version:           "0.10.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -952,7 +962,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.9.2  — Patent Pending       ║")
+	fmt.Println("║       v0.10.0 — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Ed25519   : %s\n", base64.StdEncoding.EncodeToString(n.publicKey))
@@ -1486,7 +1496,154 @@ func deriveOllamaURL(apiURL string) string {
 	return fmt.Sprintf("http://%s:11434", u.Hostname())
 }
 
+func runCACommand(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: vernex-node ca <subcommand>")
+		fmt.Fprintln(os.Stderr, "  init                — generate root CA (run once on bootstrap node)")
+		fmt.Fprintln(os.Stderr, "  init-intermediate   — generate + sign intermediate CA (requires root)")
+		fmt.Fprintln(os.Stderr, "  token [network-id]  — generate enrollment token (bootstrap only)")
+		fmt.Fprintln(os.Stderr, "  enroll --bootstrap <url> --token '<json>'  — enroll this node")
+		os.Exit(1)
+	}
+
+	home, _ := os.UserHomeDir()
+	configDir := filepath.Join(home, "vernex", "config")
+	cfg := loadConfig()
+
+	switch args[0] {
+	case "init":
+		if _, err := os.Stat(filepath.Join(configDir, "root.crt")); err == nil {
+			fmt.Fprintln(os.Stderr, "  [!] Root CA already exists (config/root.crt). Delete it to regenerate.")
+			os.Exit(1)
+		}
+		_, pubKey, err := loadOrGenerateKeypair(configDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] keypair error: %v\n", err)
+			os.Exit(1)
+		}
+		nodeID := nodeIDFromPublicKey(pubKey)
+		mode := cfg.CAMode
+		if mode == "" {
+			mode = "single"
+		}
+		k, n := cfg.CAThresholdK, cfg.CAThresholdN
+		if k == 0 {
+			k = 3
+		}
+		if n == 0 {
+			n = 5
+		}
+		rca, err := vernexca.GenerateRootCA(configDir, nodeID, mode, k, n)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] Root CA generation failed: %v\n", err)
+			os.Exit(1)
+		}
+		if rca.Cert != nil {
+			fmt.Printf("  [✓] Fingerprint (SHA-256 prefix): %s\n", rca.Cert.Fingerprint())
+		}
+		if mode == "single" {
+			fmt.Println("  [→] Next: run 'vernex-node ca init-intermediate' to create the signing CA")
+		}
+
+	case "init-intermediate":
+		if _, err := os.Stat(filepath.Join(configDir, "intermediate.crt")); err == nil {
+			fmt.Fprintln(os.Stderr, "  [!] Intermediate CA already exists (config/intermediate.crt).")
+			os.Exit(1)
+		}
+		_, pubKey, err := loadOrGenerateKeypair(configDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] keypair error: %v\n", err)
+			os.Exit(1)
+		}
+		nodeID := nodeIDFromPublicKey(pubKey)
+		_, csr, err := vernexca.GenerateIntermediateCA(configDir, nodeID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] Intermediate CA key gen failed: %v\n", err)
+			os.Exit(1)
+		}
+		rca, err := vernexca.LoadRootCA(configDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] Root CA not found — run 'vernex-node ca init' first: %v\n", err)
+			os.Exit(1)
+		}
+		csrBytes, _ := json.Marshal(csr)
+		cert, err := rca.SignIntermediateCSR(csrBytes)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] Signing intermediate CSR failed: %v\n", err)
+			os.Exit(1)
+		}
+		certData, _ := json.MarshalIndent(cert, "", "  ")
+		certPath := filepath.Join(configDir, "intermediate.crt")
+		if err := os.WriteFile(certPath, certData, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] Write intermediate cert failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("  [✓] Intermediate CA cert saved to %s\n", certPath)
+		fmt.Printf("  [✓] Fingerprint: %s\n", cert.Fingerprint())
+		fmt.Println("  [→] Next: run 'vernex-node ca token' to generate enrollment tokens")
+
+	case "token":
+		if !cfg.IsBootstrap {
+			fmt.Fprintln(os.Stderr, "  [!] Only bootstrap nodes can issue tokens (set \"is_bootstrap\": true in config/node.json)")
+			os.Exit(1)
+		}
+		rca, err := vernexca.LoadRootCA(configDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] Load root CA failed: %v\n", err)
+			os.Exit(1)
+		}
+		networkID := "vernex-mainnet"
+		if len(args) > 1 {
+			networkID = args[1]
+		}
+		token, err := vernexca.GenerateEnrollmentToken(networkID, 30*24*time.Hour, rca.PrivKey)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] Token generation failed: %v\n", err)
+			os.Exit(1)
+		}
+		tokenJSON, _ := json.MarshalIndent(token, "", "  ")
+		fmt.Printf("\n  Enrollment Token (valid until %s):\n\n%s\n\n", token.ExpiresAt.Format("2006-01-02"), tokenJSON)
+		fmt.Println("  Share this with the new node operator.")
+		fmt.Println("  They run: vernex-node ca enroll --bootstrap <this_url> --token '<json>'")
+
+	case "enroll":
+		fs := flag.NewFlagSet("ca enroll", flag.ExitOnError)
+		bootstrapURL := fs.String("bootstrap", "", "Bootstrap node HTTPS URL (e.g. https://76.244.40.49:7701)")
+		tokenStr := fs.String("token", "", "Enrollment token JSON (from bootstrap operator)")
+		fs.Parse(args[1:]) //nolint:errcheck
+		if *bootstrapURL == "" || *tokenStr == "" {
+			fmt.Fprintln(os.Stderr, "Usage: vernex-node ca enroll --bootstrap <url> --token '<json>'")
+			os.Exit(1)
+		}
+		var token vernexca.EnrollmentToken
+		if err := json.Unmarshal([]byte(*tokenStr), &token); err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] Token parse error: %v\n", err)
+			os.Exit(1)
+		}
+		_, pubKey, err := loadOrGenerateKeypair(configDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] keypair error: %v\n", err)
+			os.Exit(1)
+		}
+		nodeID := nodeIDFromPublicKey(pubKey)
+		if err := vernexca.ComputeNodeEnroll(*bootstrapURL, token, nodeID, configDir); err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] Enrollment failed: %v\n", err)
+			os.Exit(1)
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "  [!] Unknown ca subcommand: %s\n", args[0])
+		fmt.Fprintln(os.Stderr, "  Usage: vernex-node ca <init|init-intermediate|token|enroll>")
+		os.Exit(1)
+	}
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "ca" {
+		runCACommand(os.Args[2:])
+		return
+	}
+
 	cfg := loadConfig()
 
 	// Load or generate ed25519 keypair; derive node ID from public key.
@@ -2406,7 +2563,109 @@ func main() {
 			json.NewEncoder(w).Encode(map[string]string{"status": "punching"})
 		})
 
+		// /ca-sync — returns known CA certs for gossip propagation (public, no auth).
+		http.HandleFunc("/ca-sync", vernexca.HandleCASync(configDir))
+
+		if node.cfg.IsBootstrap {
+			// /sign-intermediate — root CA signs an intermediate CSR (bootstrap only).
+			// Requires config/root.key to be present (single mode).
+			http.HandleFunc("/sign-intermediate", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					http.Error(w, "POST required", http.StatusMethodNotAllowed)
+					return
+				}
+				rca, err := vernexca.LoadRootCA(configDir)
+				if err != nil {
+					http.Error(w, "root CA not available: "+err.Error(), http.StatusServiceUnavailable)
+					return
+				}
+				csrBytes, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, "read body failed", http.StatusBadRequest)
+					return
+				}
+				cert, err := rca.SignIntermediateCSR(csrBytes)
+				if err != nil {
+					http.Error(w, "signing failed: "+err.Error(), http.StatusBadRequest)
+					return
+				}
+				certBytes, _ := json.Marshal(cert)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(certBytes) //nolint:errcheck
+				fmt.Printf("  [✓] signed intermediate CSR: cn=%s\n", cert.Subject.CommonName)
+			})
+
+			// /enroll — intermediate CA signs a compute node CSR using enrollment token.
+			http.HandleFunc("/enroll", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					http.Error(w, "POST required", http.StatusMethodNotAllowed)
+					return
+				}
+				var req struct {
+					Token json.RawMessage `json:"token"`
+					CSR   json.RawMessage `json:"csr"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				var token vernexca.EnrollmentToken
+				if err := json.Unmarshal(req.Token, &token); err != nil {
+					http.Error(w, "invalid token JSON: "+err.Error(), http.StatusBadRequest)
+					return
+				}
+				ica, err := vernexca.LoadIntermediateCA(configDir)
+				if err != nil {
+					http.Error(w, "intermediate CA not available: "+err.Error(), http.StatusServiceUnavailable)
+					return
+				}
+				certBytes, err := ica.SignComputeNodeCSR(req.CSR, &token)
+				if err != nil {
+					http.Error(w, "enrollment failed: "+err.Error(), http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]json.RawMessage{"cert": certBytes}) //nolint:errcheck
+			})
+
+			// /token-gen — localhost only — generate a signed enrollment token.
+			http.HandleFunc("/token-gen", func(w http.ResponseWriter, r *http.Request) {
+				if !isLocalhost(r) {
+					http.Error(w, "localhost only", http.StatusForbidden)
+					return
+				}
+				if r.Method != http.MethodPost {
+					http.Error(w, "POST required", http.StatusMethodNotAllowed)
+					return
+				}
+				var req struct {
+					NetworkID string `json:"network_id"`
+				}
+				json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck
+				if req.NetworkID == "" {
+					req.NetworkID = "vernex-mainnet"
+				}
+				rca, err := vernexca.LoadRootCA(configDir)
+				if err != nil {
+					http.Error(w, "root CA not available: "+err.Error(), http.StatusServiceUnavailable)
+					return
+				}
+				token, err := vernexca.GenerateEnrollmentToken(req.NetworkID, 30*24*time.Hour, rca.PrivKey)
+				if err != nil {
+					http.Error(w, "token generation failed: "+err.Error(), http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(token) //nolint:errcheck
+				fmt.Printf("  [✓] enrollment token generated  network=%s  expires=%s\n",
+					req.NetworkID, token.ExpiresAt.Format("2006-01-02"))
+			})
+		}
+
 		fmt.Printf("  [✓] Dashboard API (HTTPS) listening on port %d\n", node.cfg.APIPort)
+		if node.cfg.IsBootstrap {
+			fmt.Println("  [✓] Bootstrap endpoints active: /sign-intermediate  /enroll  /token-gen")
+		}
 		srv := &http.Server{
 			Addr:      fmt.Sprintf(":%d", node.cfg.APIPort),
 			TLSConfig: tlsCfg,
