@@ -619,6 +619,7 @@ type PeerEntry struct {
 	ExternalPort int             `json:"external_port,omitempty"`
 	LastSeen     time.Time       `json:"last_seen"`
 	PushedStatus json.RawMessage `json:"pushed_status,omitempty"` // last /status payload pushed on heartbeat
+	CertVerified bool            `json:"cert_verified"`           // true if VernexCert chain verified via TrustStore
 }
 
 // PeerRegistry holds in-memory heartbeat registrations from peer nodes.
@@ -2262,15 +2263,34 @@ func main() {
 				http.Error(w, "node_id and api_url required", http.StatusBadRequest)
 				return
 			}
-			node.peerRegistry.Register(PeerEntry{
+			entry := PeerEntry{
 				NodeID:       req.NodeID,
 				APIURL:       req.APIURL,
 				ExternalIP:   req.ExternalIP,
 				ExternalPort: req.ExternalPort,
 				LastSeen:     time.Now(),
 				PushedStatus: req.Status,
-			})
+			}
+			node.peerRegistry.Register(entry)
 			fmt.Printf("  [↔] registered peer  id=%s  ext=%s:%d\n", req.NodeID, req.ExternalIP, req.ExternalPort)
+			// Async cert verification — does not block registration.
+			go func(apiURL, nodeID string) {
+				cert, err := vernexca.FetchPeerCert(apiURL, node.buildPeerTLSClient(5*time.Second))
+				if err != nil {
+					fmt.Printf("  [~] cert-verify: no cert from %s (%v)\n", nodeID, err)
+					return
+				}
+				if err := node.trustStore.VerifyCert(*cert); err != nil {
+					fmt.Printf("  [!] cert-verify: UNVERIFIED %s — %v\n", nodeID, err)
+					return
+				}
+				// Update registry entry with verified status
+				if existing, ok := node.peerRegistry.GetByNodeID(nodeID); ok {
+					existing.CertVerified = true
+					node.peerRegistry.Register(existing)
+				}
+				fmt.Printf("  [✓] cert-verify: VERIFIED %s\n", nodeID)
+			}(req.APIURL, req.NodeID)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "node_id": node.cfg.NodeID})
 		})
@@ -2287,6 +2307,7 @@ func main() {
 				ExternalPort   int    `json:"external_port,omitempty"`
 				ConnectionType string `json:"connection_type"`
 				LastSeenAgoSec int64  `json:"last_seen_ago_sec"`
+				CertVerified   bool   `json:"cert_verified"`
 			}
 			out := make([]peerOut, 0, len(peers))
 			for _, p := range peers {
@@ -2297,6 +2318,7 @@ func main() {
 					ExternalPort:   p.ExternalPort,
 					ConnectionType: node.connectionType(p),
 					LastSeenAgoSec: int64(time.Since(p.LastSeen).Seconds()),
+					CertVerified:   p.CertVerified,
 				})
 			}
 			json.NewEncoder(w).Encode(out)
