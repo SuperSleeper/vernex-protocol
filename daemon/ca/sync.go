@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,11 +12,14 @@ import (
 )
 
 // CASyncPayload is the gossip payload returned by /ca-sync.
+// NodeCert carries this node's own VernexCert so peers can verify the chain
+// without a separate side-channel fetch.
 type CASyncPayload struct {
 	NodeID           string          `json:"node_id,omitempty"`
 	Timestamp        time.Time       `json:"timestamp"`
 	RootCert         json.RawMessage `json:"root_cert,omitempty"`
 	IntermediateCert json.RawMessage `json:"intermediate_cert,omitempty"`
+	NodeCert         json.RawMessage `json:"node_cert,omitempty"`
 }
 
 // HandleCASync returns an HTTP handler that serves known CA certs for gossip propagation.
@@ -29,9 +33,41 @@ func HandleCASync(configDir string) http.HandlerFunc {
 		if data, err := os.ReadFile(filepath.Join(configDir, "intermediate.crt")); err == nil {
 			payload.IntermediateCert = json.RawMessage(data)
 		}
+		if data, err := os.ReadFile(filepath.Join(configDir, "node.crt")); err == nil {
+			payload.NodeCert = json.RawMessage(data)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(payload) //nolint:errcheck
 	}
+}
+
+// FetchPeerCert retrieves a peer's VernexCert via /ca-sync and returns it.
+// Returns an error if the peer has no node cert or the response cannot be decoded.
+func FetchPeerCert(peerURL string, client *http.Client) (*VernexCert, error) {
+	resp, err := client.Get(peerURL + "/ca-sync")
+	if err != nil {
+		return nil, fmt.Errorf("GET /ca-sync from %s: %w", peerURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ca-sync returned HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read ca-sync body: %w", err)
+	}
+	var payload CASyncPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("decode ca-sync payload: %w", err)
+	}
+	if len(payload.NodeCert) == 0 {
+		return nil, fmt.Errorf("peer at %s has no node cert (not yet enrolled)", peerURL)
+	}
+	var cert VernexCert
+	if err := json.Unmarshal(payload.NodeCert, &cert); err != nil {
+		return nil, fmt.Errorf("parse node cert from ca-sync: %w", err)
+	}
+	return &cert, nil
 }
 
 // PullCASync fetches CA certs from a peer and stores any new ones locally.
