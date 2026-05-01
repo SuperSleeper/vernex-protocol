@@ -228,6 +228,9 @@ func startMDNS(node *Node) {
 						node.dynamicPeersMu.Lock()
 						node.dynamicPeers[peer.nodeID] = peerAPIURL
 						node.dynamicPeersMu.Unlock()
+						if err := node.trustStore.TrustPeerCN(peer.nodeID); err != nil {
+							fmt.Printf("  [!] mDNS auto-trust: could not persist CN %s: %v\n", peer.nodeID, err)
+						}
 						if !alreadyKnown {
 							fmt.Printf("  [✓] mDNS auto-trust: %s cert chain verified\n", peer.nodeID)
 						}

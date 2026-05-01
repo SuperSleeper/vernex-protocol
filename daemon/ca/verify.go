@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"sync"
 	"time"
 )
 
@@ -20,6 +22,8 @@ type TrustStore struct {
 	RootCert      *VernexCert
 	Intermediates []VernexCert
 	configDir     string
+	trustedCNs    map[string]bool // peer node IDs whose VernexCert chain has been verified
+	mu            sync.RWMutex   // guards trustedCNs only
 }
 
 // LoadTrustStore reads config/root.crt and config/trusted_intermediates.json.
@@ -58,7 +62,67 @@ func LoadTrustStore(configDir string) (*TrustStore, error) {
 		}
 	}
 
+	ts.loadTrustedCNs()
 	return ts, nil
+}
+
+// loadTrustedCNs populates trustedCNs from config/trusted_certs/trusted_nodes.json.
+// Called once during LoadTrustStore before the TrustStore is shared — no locking needed.
+func (ts *TrustStore) loadTrustedCNs() {
+	ts.trustedCNs = make(map[string]bool)
+	path := filepath.Join(ts.configDir, "trusted_certs", "trusted_nodes.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return // file absent on first run — start empty
+	}
+	var cns []string
+	if err := json.Unmarshal(data, &cns); err != nil {
+		return
+	}
+	for _, cn := range cns {
+		ts.trustedCNs[cn] = true
+	}
+	if len(cns) > 0 {
+		log.Printf("[trust] loaded %d trusted peer CN(s) from trusted_nodes.json", len(cns))
+	}
+}
+
+// TrustPeerCN marks cn as CA-verified and persists the updated set to
+// config/trusted_certs/trusted_nodes.json (dir 0700, file 0600).
+// No-op if cn is already trusted.
+func (ts *TrustStore) TrustPeerCN(cn string) error {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.trustedCNs[cn] {
+		return nil
+	}
+	ts.trustedCNs[cn] = true
+	return ts.persistTrustedCNs()
+}
+
+// IsTrustedCN reports whether cn has been CA-chain-verified in this TrustStore.
+func (ts *TrustStore) IsTrustedCN(cn string) bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.trustedCNs[cn]
+}
+
+// persistTrustedCNs writes trustedCNs to disk. Must be called with mu held (write).
+func (ts *TrustStore) persistTrustedCNs() error {
+	dir := filepath.Join(ts.configDir, "trusted_certs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create trusted_certs dir: %w", err)
+	}
+	cns := make([]string, 0, len(ts.trustedCNs))
+	for cn := range ts.trustedCNs {
+		cns = append(cns, cn)
+	}
+	sort.Strings(cns) // deterministic output
+	data, err := json.MarshalIndent(cns, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "trusted_nodes.json"), data, 0600)
 }
 
 func (ts *TrustStore) hasIntermediate(cn string) bool {
@@ -150,7 +214,11 @@ func (ts *TrustStore) VerifyTLSPeerCert(rawCerts [][]byte, _ [][]*x509.Certifica
 		log.Printf("[tls] could not parse peer TLS cert: %v — TOFU: allowing", err)
 		return nil
 	}
-	log.Printf("[tls] TOFU: peer cert CN=%q serial=%s", cert.Subject.CommonName, cert.SerialNumber)
+	cn := cert.Subject.CommonName
+	if ts.IsTrustedCN(cn) {
+		return nil // CA-chain already verified — suppress TOFU log
+	}
+	log.Printf("[tls] TOFU: peer cert CN=%q serial=%s", cn, cert.SerialNumber)
 	return nil
 }
 
