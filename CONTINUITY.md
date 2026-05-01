@@ -1,16 +1,51 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-April 30, 2026 (session 12)
+April 30, 2026 (session 13)
 
 ## Current Version
-v0.11.4
+v0.11.5
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
 | vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | systemd auto-start — bootstrap node |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
+
+## What Was Just Completed (v0.11.5 — bootstrap provisioning script + enrollment in node-setup)
+
+### scripts/vernex-bootstrap-setup.sh — new file
+
+Full bootstrap node provisioning from a fresh Pop!_OS or Ubuntu 24.04 system. 10-section idempotent script:
+
+1. **Pre-flight**: non-root check, OS detection, required tools (curl git python3 jq), public IP via ipify
+2. **Go install**: version check, download go1.22.5 if absent, PATH persistence
+3. **Repo + build**: clone or pull, `go build -ldflags "-X vernex/daemon/ca.BuildTime=..."` (fallback to plain build if variable absent)
+4. **Bootstrap config**: creates or patches `config/node.json` with `is_bootstrap: true`; runs daemon for 3s to generate keypairs and persist node_id
+5. **CA init**: `vernex-node ca init` (root CA) + `vernex-node ca init-intermediate`; both idempotent
+6. **Peer CA sync**: interactive prompt for existing bootstrap URL; pulls `/ca-sync` and saves root.crt + intermediate.crt via python3; skippable (new network root)
+7. **Enrollment tokens**: generates 5 single-use 30-day tokens via `vernex-node ca token`; extracts JSON via python3; saves to `config/enrollment_tokens.txt` (mode 600); idempotent
+8. **Systemd service**: writes `/etc/systemd/system/vernex-daemon.service` directly via `sudo tee`; idempotent diff check
+9. **Start + health check**: enables + restarts service; polls `/health` up to 5× (3s each) for HTTP 200
+10. **Summary box**: PUBLIC_IP, API URL, firewall commands, next-steps checklist, then `cat enrollment_tokens.txt`
+
+### scripts/vernex-node-setup.sh — two sections added after `go build`
+
+**Section A — DNS bootstrap discovery**
+- Tries `dns.resolver.resolve('_vernex._tcp.vernex.net', 'TXT')` via python3/dnspython
+- Extracts `bootstrap=<url>` from TXT record
+- Falls back to hardcoded `https://76.244.40.49:7701` on any failure (import error, NXDOMAIN, etc.)
+- Sets `$BOOTSTRAP_URL` for Section B
+
+**Section B — Certificate enrollment**
+- Skips if `config/node.crt` already exists
+- Prompts operator to paste multi-line enrollment token JSON (Ctrl-D to submit or skip)
+- Validates JSON via python3 before passing to `./vernex-node ca enroll --bootstrap $BOOTSTRAP_URL --token "$TOKEN"`
+- Prints retry instructions on failure or skip
+
+### Version bump
+- `daemon/node.go`: Version field `"0.11.5"`, banner `v0.11.5`
+- `daemon/mdns.go`: mDNS TXT record `version=0.11.5`
 
 ## What Was Just Completed (v0.11.4 — mDNS auto-trust for CA-enrolled peers)
 
@@ -256,16 +291,15 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. Deploy v0.11.4 to Node-2: git pull, go build, restart daemon
-2. Run CA setup on Node-1 (bootstrap): `vernex-node ca init && vernex-node ca init-intermediate`
-3. Set `is_bootstrap: true` in Node-1 config/node.json, restart daemon
-4. Generate enrollment token on Node-1, enroll Node-2: `vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'`
-5. Verify cert_verified=true appears in `/peers` after Node-2 re-registers post-enrollment (CertVerified race now fixed)
-6. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
-7. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
-8. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
-9. Rename "Social" → "Compute Donation" in dashboard and daemon
-10. Version string auto-detection from source instead of hardcoded
+1. Run `bash scripts/vernex-bootstrap-setup.sh` on Node-1 to complete CA init + generate enrollment tokens
+2. Deploy v0.11.5 to Node-2: git pull, go build, restart daemon
+3. Enroll Node-2 using a token from Node-1: `bash scripts/vernex-node-setup.sh` (Section B) or manually with `vernex-node ca enroll`
+4. Verify cert_verified=true appears in `/peers` after Node-2 re-registers post-enrollment
+5. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
+6. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
+7. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
+8. Rename "Social" → "Compute Donation" in dashboard and daemon
+9. Version string auto-detection from source instead of hardcoded
 
 ## Design Constraints (never violate)
 - All cryptography must become post-quantum resistant (ML-DSA + ML-KEM, NIST FIPS 203/204)
@@ -339,4 +373,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.11.4. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA layer (v0.10.0): Root CA → Intermediate CA → Compute Node cert chain; Shamir K-of-N threshold root. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify: true literals in source; TOFU TLS with VerifyTLSPeerCert; cert_verified per peer in /peers; 6-test suite passing. v0.11.1 fixes: CertVerified re-register race, PullCASync at startup, mDNS heartbeat wiring. v0.11.2: daemon/main.go split into 9 focused files. v0.11.3: IPv6 URL bracketing + IPv4-preference dedup in mDNS. v0.11.4: mDNS auto-trust — CA-enrolled LAN peers join automatically via cert chain check; unenrolled peers still require manual /trust-approve. Next: deploy v0.11.4 on Node-2, run CA init + enrollment workflow, verify mDNS auto-trust fires for enrolled peers. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*
+*Vernex Protocol v0.11.5. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA layer (v0.10.0): Root CA → Intermediate CA → Compute Node cert chain; Shamir K-of-N threshold root. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify: true literals in source; TOFU TLS with VerifyTLSPeerCert; cert_verified per peer in /peers; 6-test suite passing. v0.11.1 fixes: CertVerified re-register race, PullCASync at startup, mDNS heartbeat wiring. v0.11.2: daemon/main.go split into 9 focused files. v0.11.3: IPv6 URL bracketing + IPv4-preference dedup in mDNS. v0.11.4: mDNS auto-trust — CA-enrolled LAN peers join automatically via cert chain check. v0.11.5: scripts/vernex-bootstrap-setup.sh (10-section full bootstrap provisioning) + Sections A/B in vernex-node-setup.sh (DNS discovery + enrollment). Next: run vernex-bootstrap-setup.sh on Node-1 to complete CA init, enroll Node-2. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*

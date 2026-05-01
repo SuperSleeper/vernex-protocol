@@ -264,6 +264,79 @@ else
     die "go build failed — check output above"
 fi
 
+# ── Section A: DNS bootstrap discovery ────────────────────────────────────────
+step "DNS bootstrap discovery"
+
+BOOTSTRAP_URL=""
+info "Looking up _vernex._tcp.vernex.net DNS TXT record"
+BOOTSTRAP_URL="$(python3 -c "
+import sys
+try:
+    import dns.resolver
+    answers = dns.resolver.resolve('_vernex._tcp.vernex.net', 'TXT')
+    for rdata in answers:
+        for txt in rdata.strings:
+            val = txt.decode('utf-8') if isinstance(txt, bytes) else txt
+            if val.startswith('bootstrap='):
+                print(val[len('bootstrap='):].strip())
+                sys.exit(0)
+except Exception:
+    pass
+" 2>/dev/null || echo '')"
+
+if [[ -n "${BOOTSTRAP_URL}" ]]; then
+    ok "Bootstrap discovered via DNS TXT: ${BOOTSTRAP_URL}"
+else
+    BOOTSTRAP_URL="https://76.244.40.49:7701"
+    info "DNS lookup failed — using hardcoded bootstrap: ${BOOTSTRAP_URL}"
+fi
+
+# ── Section B: Certificate enrollment ─────────────────────────────────────────
+step "Certificate enrollment"
+
+if [[ -f "${VERNEX_HOME}/config/node.crt" ]]; then
+    ok "Node cert already present (config/node.crt) — skipping enrollment"
+else
+    echo
+    echo -e "${CYAN}  This node is not yet enrolled with the Vernex CA.${RESET}"
+    echo -e "${CYAN}  Paste your enrollment token JSON below (multi-line OK).${RESET}"
+    echo -e "${CYAN}  Press Ctrl-D when done. Press Ctrl-D immediately to skip.${RESET}"
+    echo
+    TOKEN="$(python3 - <<'PYEOF' 2>/dev/null || echo ''
+import sys, json
+lines = []
+try:
+    for line in sys.stdin:
+        lines.append(line)
+except EOFError:
+    pass
+raw = "".join(lines).strip()
+if not raw:
+    sys.exit(0)
+try:
+    json.loads(raw)
+    print(raw)
+except Exception:
+    print("", end="")
+PYEOF
+)"
+    if [[ -z "${TOKEN}" ]]; then
+        warn "No enrollment token provided — skipping enrollment"
+        warn "Enroll later: cd ~/vernex/daemon && ./vernex-node ca enroll \\"
+        warn "  --bootstrap ${BOOTSTRAP_URL} --token '<json>'"
+    else
+        info "Enrolling with bootstrap: ${BOOTSTRAP_URL}"
+        cd "${VERNEX_HOME}/daemon"
+        if ./vernex-node ca enroll --bootstrap "${BOOTSTRAP_URL}" --token "${TOKEN}"; then
+            ok "Enrollment complete — node cert saved to config/node.crt"
+        else
+            warn "Enrollment failed — retry manually:"
+            warn "  cd ~/vernex/daemon && ./vernex-node ca enroll \\"
+            warn "  --bootstrap ${BOOTSTRAP_URL} --token '<json>'"
+        fi
+    fi
+fi
+
 # ── Dashboard Python venv ──────────────────────────────────────────────────────
 step "Dashboard Python environment"
 
