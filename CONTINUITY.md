@@ -1,16 +1,37 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-April 30, 2026 (session 9)
+April 30, 2026 (session 10)
 
 ## Current Version
-v0.11.1
+v0.11.2
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
 | vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | systemd auto-start — bootstrap node |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
+
+## What Was Just Completed (v0.11.2 — daemon/main.go split into 9 focused files)
+
+### Refactor: daemon/main.go → 9 focused source files (REFACTOR ONLY — no logic changes)
+
+`daemon/main.go` was 2801 lines. Split into package main files, all in `daemon/`:
+
+| File | Contents | Lines |
+|------|----------|-------|
+| config.go | PeerNode, NodeConfig, loadConfig, saveConfig, generateNodeID | 106 |
+| node.go | Node struct, NodeStats, statusResponse, NewNode, outboundIP, fetchPublicIP, startContributionTicker, startPublicIPRefresher | 300 |
+| peer.go | PeerEntry, PeerRegistry, isPrivateIP, peerAPIURL, deriveOllamaURL, registerWithPeers, startHeartbeatLoop | 216 |
+| mdns.go | registerMDNSViaAvahi, avahiPeer, discoverAvahiPeers, connectionType, startMDNS | 226 |
+| punch.go | sendHolePunchPackets, initiatePunch, stunResponse, discoverExternalEndpoint, signalPunch, isLocalhost, startUDPListener, startIPWatchdog, startAutoPunch | 192 |
+| scheduler.go | TokenRequest, Scheduler, pendingReview, commonsAssessment, assessCommunityBenefit, RateLimiter, rateLimitKey, startCommonsReviewExpiry, startRateLimiterPrune | 317 |
+| inference.go | defaultModel, ollamaNode, buildOllamaNodes, callOllamaAt, routedCallOllama, ContextTurn, buildPromptWithContext, searchWeb, needsWebSearch | 225 |
+| tls.go | mldsaScheme, nodeIDFromPublicKey, loadOrGenerateKeypair, loadOrGenerateMLDSAKeypair, buildTLSConfig, signRequest, verifyPeerRequest, peerPublicKey, peerMLDSAPublicKey | 266 |
+| handlers.go | startHTTPServer (all 16 endpoints), handleConnection | 739 |
+| main.go | takeInhibitorLock, runCACommand, main() | 311 |
+
+Build passes, `go vet` clean, all logic unchanged.
 
 ## What Was Just Completed (v0.11.1 — CertVerified race fix, PullCASync on startup, mDNS heartbeat)
 
@@ -213,7 +234,7 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. Deploy v0.11.1 to Node-2: git pull, go build, restart daemon
+1. Deploy v0.11.2 to Node-2: git pull, go build, restart daemon
 2. Run CA setup on Node-1 (bootstrap): `vernex-node ca init && vernex-node ca init-intermediate`
 3. Set `is_bootstrap: true` in Node-1 config/node.json, restart daemon
 4. Generate enrollment token on Node-1, enroll Node-2: `vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'`
@@ -296,4 +317,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.11.1. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA layer (v0.10.0): Root CA → Intermediate CA → Compute Node cert chain; Shamir K-of-N threshold root. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify: true literals in source; TOFU TLS with VerifyTLSPeerCert; cert_verified per peer in /peers; 6-test suite passing. v0.11.1 fixes: CertVerified re-register race (PeerRegistry.SetCertVerified + preserve on heartbeat), PullCASync at startup for non-bootstrap nodes, mDNS-discovered peers added to heartbeat sweep via dynamicPeers map. Next: deploy on Node-2, run CA init + enrollment workflow, verify cert_verified=true stays true across heartbeats. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*
+*Vernex Protocol v0.11.2. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA layer (v0.10.0): Root CA → Intermediate CA → Compute Node cert chain; Shamir K-of-N threshold root. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify: true literals in source; TOFU TLS with VerifyTLSPeerCert; cert_verified per peer in /peers; 6-test suite passing. v0.11.1 fixes: CertVerified re-register race, PullCASync at startup, mDNS heartbeat wiring. v0.11.2: daemon/main.go split into 9 focused files (config.go, node.go, peer.go, mdns.go, punch.go, scheduler.go, inference.go, tls.go, handlers.go) — refactor only, no logic changes, build + vet clean. Next: deploy v0.11.2 on Node-2, run CA init + enrollment workflow, verify cert_verified=true stays true across heartbeats. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*

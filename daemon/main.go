@@ -298,7 +298,7 @@ func main() {
 
 	fmt.Printf("  [✓] P2P listener on port %d\n", node.cfg.DaemonPort)
 	fmt.Println("  [✓] Node is online — waiting for connections...")
-	fmt.Println("  Press Ctrl+C to stop\n")
+	fmt.Print("  Press Ctrl+C to stop\n\n")
 
 	for {
 		conn, err := listener.Accept()
