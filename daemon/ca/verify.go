@@ -97,7 +97,11 @@ func (ts *TrustStore) TrustPeerCN(cn string) error {
 		return nil
 	}
 	ts.trustedCNs[cn] = true
-	return ts.persistTrustedCNs()
+	if err := ts.persistTrustedCNs(); err != nil {
+		log.Printf("[trust] warn: failed to persist trusted CN %q: %v (configDir=%s)", cn, err, ts.configDir)
+		return err
+	}
+	return nil
 }
 
 // IsTrustedCN reports whether cn has been CA-chain-verified in this TrustStore.
