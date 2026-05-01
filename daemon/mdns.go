@@ -51,10 +51,11 @@ func registerMDNSViaAvahi(cfg NodeConfig, pubKeyB64 string) (*dbus.Conn, error) 
 
 // avahiPeer holds a single result from discoverAvahiPeers.
 type avahiPeer struct {
-	nodeID string
-	pubKey string
-	addr   string
-	port   int
+	nodeID     string
+	pubKey     string
+	addr       string
+	port       int
+	addrFamily string // "IPv4" or "IPv6"
 }
 
 // discoverAvahiPeers runs avahi-browse -r -t to find _vernex._tcp services on the LAN.
@@ -76,7 +77,8 @@ func discoverAvahiPeers(ownNodeID string) []avahiPeer {
 	out, _ := cmd.Output()
 	close(done)
 
-	var peers []avahiPeer
+	// byNodeID deduplicates per-node entries; IPv4 beats IPv6 when both are present.
+	byNodeID := make(map[string]avahiPeer)
 	for _, line := range strings.Split(string(out), "\n") {
 		if !strings.HasPrefix(line, "=") {
 			continue // only process resolved entries (= prefix)
@@ -105,12 +107,25 @@ func discoverAvahiPeers(ownNodeID string) []avahiPeer {
 		if nodeID == "" || nodeID == ownNodeID {
 			continue
 		}
-		peers = append(peers, avahiPeer{
-			nodeID: nodeID,
-			pubKey: txt["pub_key"],
-			addr:   addrStr,
-			port:   port,
-		})
+		addrFamily := "IPv4"
+		if strings.Contains(addrStr, ":") {
+			addrFamily = "IPv6"
+		}
+		p := avahiPeer{
+			nodeID:     nodeID,
+			pubKey:     txt["pub_key"],
+			addr:       addrStr,
+			port:       port,
+			addrFamily: addrFamily,
+		}
+		// Prefer IPv4: only overwrite an existing entry if the new one is IPv4 and old is IPv6.
+		if existing, seen := byNodeID[nodeID]; !seen || (p.addrFamily == "IPv4" && existing.addrFamily == "IPv6") {
+			byNodeID[nodeID] = p
+		}
+	}
+	peers := make([]avahiPeer, 0, len(byNodeID))
+	for _, p := range byNodeID {
+		peers = append(peers, p)
 	}
 	return peers
 }
@@ -172,7 +187,12 @@ func startMDNS(node *Node) {
 
 		for {
 			for _, peer := range discoverAvahiPeers(cfg.NodeID) {
-				peerAPIURL := fmt.Sprintf("https://%s:%d", peer.addr, peer.port)
+				var peerAPIURL string
+				if strings.Contains(peer.addr, ":") {
+					peerAPIURL = fmt.Sprintf("https://[%s]:%d", peer.addr, peer.port)
+				} else {
+					peerAPIURL = fmt.Sprintf("https://%s:%d", peer.addr, peer.port)
+				}
 
 				node.mdnsDiscoveredMu.Lock()
 				alreadyKnown := node.mdnsDiscovered[peer.nodeID]
