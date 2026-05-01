@@ -97,6 +97,7 @@ func (ts *TrustStore) TrustPeerCN(cn string) error {
 		return nil
 	}
 	ts.trustedCNs[cn] = true
+	log.Printf("[trust] debug: TrustPeerCN set cn=%q ts=%p", cn, ts)
 	if err := ts.persistTrustedCNs(); err != nil {
 		log.Printf("[trust] warn: failed to persist trusted CN %q: %v (configDir=%s)", cn, err, ts.configDir)
 		return err
@@ -108,7 +109,11 @@ func (ts *TrustStore) TrustPeerCN(cn string) error {
 func (ts *TrustStore) IsTrustedCN(cn string) bool {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
-	return ts.trustedCNs[cn]
+	trusted := ts.trustedCNs[cn]
+	if !trusted {
+		log.Printf("[trust] debug: IsTrustedCN miss cn=%q ts=%p map=%v", cn, ts, ts.trustedCNs)
+	}
+	return trusted
 }
 
 // persistTrustedCNs writes trustedCNs to disk. Must be called with mu held (write).
