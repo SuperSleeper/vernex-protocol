@@ -649,33 +649,6 @@ func needsWebSearch(prompt string) (bool, string) {
 }
 
 // sendHolePunchPackets sends count UDP "VERNEX-PUNCH" datagrams to addr with 50ms spacing.
-func (n *Node) sendHolePunchPackets(addr *net.UDPAddr, count int) {
-	if n.udpConn == nil || addr == nil {
-		return
-	}
-	for i := 0; i < count; i++ {
-		n.udpConn.WriteToUDP([]byte("VERNEX-PUNCH"), addr) //nolint:errcheck
-		time.Sleep(50 * time.Millisecond)
-	}
-}
-
-// initiatePunch triggers simultaneous UDP hole punching toward peer.
-// Signals the peer via /punch-signal so both sides open NAT holes concurrently.
-func (n *Node) initiatePunch(peer PeerEntry) {
-	if peer.ExternalIP == "" || peer.ExternalPort == 0 {
-		return
-	}
-	target := &net.UDPAddr{IP: net.ParseIP(peer.ExternalIP), Port: peer.ExternalPort}
-	extIP, _ := n.externalIP.Load().(string)
-	extPort := int(n.externalPort.Load())
-	go func() {
-		if err := signalPunch(peer.APIURL, extIP, extPort, n.trustStore); err != nil {
-			fmt.Printf("  [!] punch-signal → %s failed: %v\n", peer.NodeID, err)
-		}
-	}()
-	n.sendHolePunchPackets(target, 5)
-}
-
 // signRequest adds hybrid signing headers to an outgoing inter-node HTTP request.
 // Message signed: nodeID + "|" + timestamp + "|" + hex(SHA256(body))
 // Both ed25519 (classical) and ML-DSA 44 (post-quantum) signatures are attached.
@@ -826,65 +799,6 @@ func takeInhibitorLock() (*os.File, error) {
 	return os.NewFile(uintptr(fd), "inhibitor"), nil
 }
 
-// stunResponse is the payload returned by the /stun endpoint.
-type stunResponse struct {
-	ExternalIP   string `json:"external_ip"`
-	ExternalPort int    `json:"external_port"`
-	NodeID       string `json:"node_id"`
-}
-
-// discoverExternalEndpoint calls /stun on each configured peer in turn and returns
-// the first successful response. This reveals the node's external IP:port as seen
-// through NAT — the foundation for UDP hole punching (Phase 2).
-// Returns ("", 0) if no peer responds.
-func discoverExternalEndpoint(cfg NodeConfig, ts *vernexca.TrustStore) (string, int) {
-	client := ts.NewTLSClient(5 * time.Second)
-	for _, peer := range cfg.PeerNodes {
-		apiURL, err := peerAPIURL(peer)
-		if err != nil {
-			continue
-		}
-		resp, err := client.Get(apiURL + "/stun")
-		if err != nil {
-			continue
-		}
-		var stun stunResponse
-		err = json.NewDecoder(resp.Body).Decode(&stun)
-		resp.Body.Close()
-		if err != nil || stun.ExternalIP == "" {
-			continue
-		}
-		fmt.Printf("  [✓] STUN via %s: external endpoint %s:%d\n", peer.Name, stun.ExternalIP, stun.ExternalPort)
-		return stun.ExternalIP, stun.ExternalPort
-	}
-	return "", 0
-}
-
-// signalPunch sends a /punch-signal to targetAPIURL, instructing that node to initiate
-// UDP hole punching toward punchIP:punchPort simultaneously.
-func signalPunch(targetAPIURL, punchIP string, punchPort int, ts *vernexca.TrustStore) error {
-	payload, _ := json.Marshal(map[string]any{
-		"punch_ip":   punchIP,
-		"punch_port": punchPort,
-	})
-	client := ts.NewTLSClient(5 * time.Second)
-	resp, err := client.Post(targetAPIURL+"/punch-signal", "application/json", bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	return nil
-}
-
-
-// isLocalhost returns true only if the request came from 127.0.0.1 or ::1.
-func isLocalhost(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return false
-	}
-	return host == "127.0.0.1" || host == "::1"
-}
 
 func runCACommand(args []string) {
 	if len(args) == 0 {
@@ -1149,103 +1063,15 @@ func main() {
 
 	startPublicIPRefresher(node)
 
-	// IP change watchdog: every 30s compare current LAN + public IPs against last known values.
-	// On any change: re-run STUN, update external endpoint, re-register with all peers,
-	// and clear peerHoles (old UDP holes are invalid after an IP change).
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		for range ticker.C {
-			curLAN := outboundIP("8.8.8.8")
-			curPublic, _ := node.cachedPublicIP.Load().(string) // use cache — don't hammer ipify every 30s
-			prevLAN, _ := node.lastLANIP.Load().(string)
-			prevPublic, _ := node.lastPublicIP.Load().(string)
-
-			if curLAN == prevLAN && curPublic == prevPublic {
-				continue
-			}
-
-			fmt.Printf("  [→] IP change detected:")
-			if curLAN != prevLAN {
-				fmt.Printf(" LAN %s → %s", prevLAN, curLAN)
-			}
-			if curPublic != prevPublic {
-				fmt.Printf(" public %s → %s", prevPublic, curPublic)
-			}
-			fmt.Println()
-
-			node.lastLANIP.Store(curLAN)
-			node.lastPublicIP.Store(curPublic)
-
-			extIP, extPort := discoverExternalEndpoint(node.cfg, node.trustStore)
-			node.externalIP.Store(extIP)
-			node.externalPort.Store(int32(extPort))
-
-			registerWithPeers(node, extIP, extPort)
-
-			// Old UDP holes are tied to the previous IP — clear them so connectionType
-			// falls back to "relayed" until new holes are punched.
-			node.peerHolesMu.Lock()
-			node.peerHoles = make(map[string]*net.UDPAddr)
-			node.peerHolesMu.Unlock()
-
-			fmt.Println("  [✓] Re-registered with all peers after IP change")
-		}
-	}()
+	startIPWatchdog(node)
 
 	startHeartbeatLoop(node)
 
 	startMDNS(node)
 
-	// Start UDP listener on daemonPort for hole-punch packets (coexists with the TCP listener below).
-	// Single UDPConn handles both send (WriteToUDP) and receive (ReadFromUDP).
-	{
-		udpAddr := &net.UDPAddr{Port: cfg.DaemonPort}
-		udpConn, uerr := net.ListenUDP("udp", udpAddr)
-		if uerr != nil {
-			fmt.Printf("  [!] UDP listener failed on port %d: %v (hole punching disabled)\n", cfg.DaemonPort, uerr)
-		} else {
-			node.udpConn = udpConn
-			fmt.Printf("  [✓] UDP listener on port %d (hole punching)\n", cfg.DaemonPort)
-			go func() {
-				buf := make([]byte, 64)
-				for {
-					n2, remoteAddr, err := udpConn.ReadFromUDP(buf)
-					if err != nil {
-						return
-					}
-					if string(buf[:n2]) != "VERNEX-PUNCH" {
-						continue
-					}
-					for _, p := range node.peerRegistry.LivePeers() {
-						if p.ExternalIP == remoteAddr.IP.String() {
-							node.peerHolesMu.Lock()
-							if _, already := node.peerHoles[p.NodeID]; !already {
-								node.peerHoles[p.NodeID] = remoteAddr
-								fmt.Printf("  [✓] UDP hole punched  peer=%s  addr=%s\n", p.NodeID, remoteAddr)
-							}
-							node.peerHolesMu.Unlock()
-							break
-						}
-					}
-				}
-			}()
-		}
-	}
+	startUDPListener(node)
 
-	// Auto-punch goroutine: every 5 minutes attempt direct connections to RELAYED peers.
-	// Skips LOCAL peers (same LAN, no NAT) and peers with no known external endpoint.
-	go func() {
-		time.Sleep(15 * time.Second)
-		for {
-			for _, p := range node.peerRegistry.LivePeers() {
-				if node.connectionType(p) == "relayed" && p.ExternalIP != "" {
-					fmt.Printf("  [→] auto-punch: initiating toward %s (%s:%d)\n", p.NodeID, p.ExternalIP, p.ExternalPort)
-					go node.initiatePunch(p)
-				}
-			}
-			time.Sleep(5 * time.Minute)
-		}
-	}()
+	startAutoPunch(node)
 
 	// Start HTTP status API on port 7701
 	go func() {
