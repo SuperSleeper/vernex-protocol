@@ -108,6 +108,7 @@ type Node struct {
 	dynamicPeers     map[string]string // node_id → api_url; mDNS-discovered peers for heartbeat
 	dynamicPeersMu   sync.RWMutex
 	trustStore       *vernexca.TrustStore
+	clockStatus      vernexca.ClockStatus
 }
 
 // outboundIP returns the local IP address used to reach peerHost.

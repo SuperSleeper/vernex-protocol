@@ -648,6 +648,13 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 					http.Error(w, "POST required", http.StatusMethodNotAllowed)
 					return
 				}
+				node.mu.RLock()
+				cs := node.clockStatus
+				node.mu.RUnlock()
+				if err := vernexca.BlockIfClockInvalid(cs); err != nil {
+					http.Error(w, "CA operation blocked: clock error: "+err.Error(), http.StatusServiceUnavailable)
+					return
+				}
 				rca, err := vernexca.LoadRootCA(configDir)
 				if err != nil {
 					http.Error(w, "root CA not available: "+err.Error(), http.StatusServiceUnavailable)
@@ -673,6 +680,13 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 			http.HandleFunc("/enroll", func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodPost {
 					http.Error(w, "POST required", http.StatusMethodNotAllowed)
+					return
+				}
+				node.mu.RLock()
+				cs := node.clockStatus
+				node.mu.RUnlock()
+				if err := vernexca.BlockIfClockInvalid(cs); err != nil {
+					http.Error(w, "CA operation blocked: clock error: "+err.Error(), http.StatusServiceUnavailable)
 					return
 				}
 				var req struct {
@@ -710,6 +724,13 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 				}
 				if r.Method != http.MethodPost {
 					http.Error(w, "POST required", http.StatusMethodNotAllowed)
+					return
+				}
+				node.mu.RLock()
+				cs := node.clockStatus
+				node.mu.RUnlock()
+				if err := vernexca.BlockIfClockInvalid(cs); err != nil {
+					http.Error(w, "CA operation blocked: clock error: "+err.Error(), http.StatusServiceUnavailable)
 					return
 				}
 				var req struct {

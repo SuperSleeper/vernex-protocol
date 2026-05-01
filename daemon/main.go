@@ -182,6 +182,19 @@ func runCACommand(args []string) {
 	}
 }
 
+// resolveBootstrapNodes returns HTTPS API URLs for all configured peer nodes.
+// These are passed to CheckSystemClock for Step D bootstrap time consensus.
+func resolveBootstrapNodes(cfg NodeConfig) []string {
+	var urls []string
+	for _, peer := range cfg.PeerNodes {
+		apiURL, err := peerAPIURL(peer)
+		if err == nil {
+			urls = append(urls, apiURL)
+		}
+	}
+	return urls
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "ca" {
 		runCACommand(os.Args[2:])
@@ -222,6 +235,38 @@ func main() {
 
 	node := NewNode(cfg, configDir, privKey, pubKey, mldsaPrivKey, mldsaPubKey)
 	node.printBanner()
+
+	// System clock verification — gates CA operations on /enroll, /sign-intermediate, /token-gen.
+	// Runs synchronously so the result is visible in the banner before any goroutines start.
+	bootstrapURLs := resolveBootstrapNodes(cfg)
+	clockStatus := vernexca.CheckSystemClock(configDir, bootstrapURLs)
+	node.mu.Lock()
+	node.clockStatus = clockStatus
+	node.mu.Unlock()
+	if clockStatus.BlockCAOps {
+		fmt.Println("  [!] CLOCK ERROR — CA operations blocked")
+		fmt.Printf("      %s\n", clockStatus.Message)
+	} else if clockStatus.Drift > time.Minute {
+		fmt.Printf("  [~] Clock drift warning: %s (source: %s)\n",
+			clockStatus.Drift.Round(time.Second), clockStatus.Source)
+	} else {
+		fmt.Printf("  [✓] Clock verified  drift=%s  source=%s\n",
+			clockStatus.Drift.Round(time.Millisecond), clockStatus.Source)
+	}
+
+	// Background clock re-check — refreshes clockStatus every 30 minutes.
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		for range ticker.C {
+			cs := vernexca.CheckSystemClock(configDir, bootstrapURLs)
+			node.mu.Lock()
+			node.clockStatus = cs
+			node.mu.Unlock()
+			if cs.BlockCAOps {
+				fmt.Printf("  [!] Clock drift exceeded — CA ops now blocked\n")
+			}
+		}
+	}()
 
 	// Take sleep/idle inhibitor lock via systemd-logind
 	inhibitor, err := takeInhibitorLock()
