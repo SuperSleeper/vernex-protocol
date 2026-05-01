@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -614,6 +615,27 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 			fmt.Printf("  [→] punch-signal: punching toward %s:%d\n", req.PunchIP, req.PunchPort)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"status": "punching"})
+		})
+
+		// /time — returns the node's current UTC time signed with its ML-DSA private key.
+		// Public endpoint; used by peers for clock consensus (Step D in CheckSystemClock).
+		// Message signed: utc + "|" + node_id
+		http.HandleFunc("/time", func(w http.ResponseWriter, r *http.Request) {
+			now := time.Now().UTC()
+			utc := now.Format(time.RFC3339)
+			msg := utc + "|" + node.cfg.NodeID
+			var sigB64 string
+			if node.mldsaPrivKey != nil {
+				sig := mldsaScheme.Sign(node.mldsaPrivKey, []byte(msg), nil)
+				sigB64 = base64.StdEncoding.EncodeToString(sig)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"utc":       utc,
+				"unix":      now.Unix(),
+				"node_id":   node.cfg.NodeID,
+				"signature": sigB64,
+			})
 		})
 
 		// /ca-sync — returns known CA certs for gossip propagation (public, no auth).
