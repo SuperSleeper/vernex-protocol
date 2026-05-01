@@ -646,6 +646,21 @@ func (pr *PeerRegistry) GetByNodeID(nodeID string) (PeerEntry, bool) {
 	return e, ok
 }
 
+// SetCertVerified atomically sets CertVerified on a stored entry without a
+// read-modify-Register round-trip that could race with a concurrent heartbeat.
+// Returns false if the peer is no longer in the registry.
+func (pr *PeerRegistry) SetCertVerified(nodeID string, verified bool) bool {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	e, ok := pr.entries[nodeID]
+	if !ok {
+		return false
+	}
+	e.CertVerified = verified
+	pr.entries[nodeID] = e
+	return true
+}
+
 // LivePeers returns all entries whose last heartbeat was within peerLiveTTL.
 func (pr *PeerRegistry) LivePeers() []PeerEntry {
 	pr.mu.RLock()
@@ -739,8 +754,10 @@ type Node struct {
 	udpConn          *net.UDPConn  // single UDP socket on daemonPort for hole punching
 	lastLANIP        atomic.Value  // string; last known LAN IP — watchdog detects changes
 	lastPublicIP     atomic.Value  // string; last known public IP — watchdog detects changes
-	mdnsDiscovered   map[string]bool // node_id → true if found via mDNS browse
+	mdnsDiscovered   map[string]bool   // node_id → true if found via mDNS browse
 	mdnsDiscoveredMu sync.RWMutex
+	dynamicPeers     map[string]string // node_id → api_url; mDNS-discovered peers for heartbeat
+	dynamicPeersMu   sync.RWMutex
 	trustStore       *vernexca.TrustStore
 }
 
@@ -901,6 +918,7 @@ func NewNode(cfg NodeConfig, configDir string, privKey ed25519.PrivateKey, pubKe
 		trustRateLimiter: NewRateLimiter(3, 60*time.Minute),
 		peerHoles:        make(map[string]*net.UDPAddr),
 		mdnsDiscovered:   make(map[string]bool),
+		dynamicPeers:     make(map[string]string),
 		trustStore: ts,
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
@@ -908,7 +926,7 @@ func NewNode(cfg NodeConfig, configDir string, privKey ed25519.PrivateKey, pubKe
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.11.0",
+			Version:           "0.11.1",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -1459,6 +1477,41 @@ func registerWithPeers(node *Node, extIP string, extPort int) {
 		resp.Body.Close()
 		fmt.Printf("  [✓] heartbeat: registered with %s (%s)\n", peer.Name, apiURL)
 	}
+
+	// Heartbeat to mDNS-discovered peers not present in static peer_nodes config.
+	node.dynamicPeersMu.RLock()
+	dynamicSnapshot := make(map[string]string, len(node.dynamicPeers))
+	for id, u := range node.dynamicPeers {
+		dynamicSnapshot[id] = u
+	}
+	node.dynamicPeersMu.RUnlock()
+
+	for peerNodeID, peerURL := range dynamicSnapshot {
+		parsed, err := url.Parse(peerURL)
+		if err != nil {
+			continue
+		}
+		ownIP := outboundIP(parsed.Hostname())
+		if extIP != "" && extIP != ownIP {
+			ownIP = extIP
+		}
+		ownURL := fmt.Sprintf("https://%s:%d", ownIP, ownAPIPort)
+		payload, _ := json.Marshal(map[string]any{
+			"node_id":       cfg.NodeID,
+			"api_url":       ownURL,
+			"external_ip":   extIP,
+			"external_port": extPort,
+			"status":        json.RawMessage(statusJSON),
+		})
+		client := node.buildPeerTLSClient(5 * time.Second)
+		resp, err := client.Post(peerURL+"/register", "application/json", bytes.NewReader(payload))
+		if err != nil {
+			fmt.Printf("  [!] heartbeat: could not reach mDNS peer %s (%s): %v\n", peerNodeID, peerURL, err)
+			continue
+		}
+		resp.Body.Close()
+		fmt.Printf("  [✓] heartbeat: registered with mDNS peer %s (%s)\n", peerNodeID, peerURL)
+	}
 }
 
 // isLocalhost returns true only if the request came from 127.0.0.1 or ::1.
@@ -1698,6 +1751,25 @@ func main() {
 		os.Exit(0)
 	}()
 
+	// Pull CA certs from peers if not yet bootstrapped locally.
+	// Runs synchronously so TrustStore is populated before the first heartbeat.
+	if _, statErr := os.Stat(filepath.Join(configDir, "root.crt")); os.IsNotExist(statErr) && len(cfg.PeerNodes) > 0 {
+		fmt.Println("  [→] No local root.crt — pulling CA certs from peers...")
+		caClient := node.buildPeerTLSClient(10 * time.Second)
+		for _, peer := range cfg.PeerNodes {
+			apiURL, err := peerAPIURL(peer)
+			if err != nil {
+				fmt.Printf("  [!] CA sync: bad peer URL %q: %v\n", peer.Name, err)
+				continue
+			}
+			if err := vernexca.PullCASync(apiURL, configDir, caClient); err != nil {
+				fmt.Printf("  [!] CA certs could not pull from %s: %v\n", peer.Name, err)
+			} else {
+				fmt.Printf("  [✓] CA certs pulled from %s\n", peer.Name)
+			}
+		}
+	}
+
 	// Start token scheduler worker
 	go node.scheduler.run(node)
 	fmt.Println("  [✓] Token scheduler running (Class 1 > Class 2, FIFO)")
@@ -1867,6 +1939,10 @@ func main() {
 						APIURL:   peerAPIURL,
 						LastSeen: time.Now(),
 					})
+					// Add to dynamic heartbeat list so registerWithPeers reaches this peer.
+					node.dynamicPeersMu.Lock()
+					node.dynamicPeers[peer.nodeID] = peerAPIURL
+					node.dynamicPeersMu.Unlock()
 					if !alreadyKnown {
 						fmt.Printf("  [✓] mDNS discovered trusted peer: %s at %s\n", peer.nodeID, peerAPIURL)
 					}
@@ -2271,6 +2347,10 @@ func main() {
 				LastSeen:     time.Now(),
 				PushedStatus: req.Status,
 			}
+			// Preserve verified state from async cert-verify — re-register must not reset it.
+			if existing, ok := node.peerRegistry.GetByNodeID(req.NodeID); ok && existing.CertVerified {
+				entry.CertVerified = true
+			}
 			node.peerRegistry.Register(entry)
 			fmt.Printf("  [↔] registered peer  id=%s  ext=%s:%d\n", req.NodeID, req.ExternalIP, req.ExternalPort)
 			// Async cert verification — does not block registration.
@@ -2284,11 +2364,8 @@ func main() {
 					fmt.Printf("  [!] cert-verify: UNVERIFIED %s — %v\n", nodeID, err)
 					return
 				}
-				// Update registry entry with verified status
-				if existing, ok := node.peerRegistry.GetByNodeID(nodeID); ok {
-					existing.CertVerified = true
-					node.peerRegistry.Register(existing)
-				}
+				// Update CertVerified directly under registry lock — avoids re-register race.
+				node.peerRegistry.SetCertVerified(nodeID, true)
 				fmt.Printf("  [✓] cert-verify: VERIFIED %s\n", nodeID)
 			}(req.APIURL, req.NodeID)
 			w.Header().Set("Content-Type", "application/json")

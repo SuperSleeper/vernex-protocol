@@ -1,16 +1,43 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-April 29, 2026 (session 8)
+April 30, 2026 (session 9)
 
 ## Current Version
-v0.11.0
+v0.11.1
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
 | vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | systemd auto-start — bootstrap node |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
+
+## What Was Just Completed (v0.11.1 — CertVerified race fix, PullCASync on startup, mDNS heartbeat)
+
+### daemon/main.go — bug fixes + wiring
+
+**CertVerified race fix (two-part)**
+- `PeerRegistry.SetCertVerified(nodeID, verified)` — new method that atomically updates
+  CertVerified under write lock; avoids the GetByNodeID → Register read-modify-write race
+- `/register` handler: before calling `Register(entry)`, checks if existing entry has
+  `CertVerified=true`; if so, preserves it on the new entry — heartbeat re-register no
+  longer resets verified state
+- Async cert-verify goroutine: now calls `SetCertVerified` directly instead of
+  GetByNodeID + Register; eliminates second overwrite race window
+
+**PullCASync wired at daemon startup**
+- In `main()`, after keypair load, before goroutines: if `config/root.crt` does not
+  exist and peer_nodes is non-empty, calls `vernexca.PullCASync()` against each peer
+- Runs synchronously so TrustStore is populated before first heartbeat fires
+- Logs `[✓] CA certs pulled from {peer}` on success or `[!]` on error
+
+**mDNS-discovered peers added to heartbeat sweep**
+- `Node` struct gains `dynamicPeers map[string]string` (nodeID → api_url) + `dynamicPeersMu`
+- mDNS discovery loop: when a trusted peer is found, its api_url is stored in `dynamicPeers`
+  in addition to being registered in `peerRegistry`
+- `registerWithPeers()` extended: after the static peer_nodes loop, snapshots `dynamicPeers`
+  under read lock and heartbeats to each — mDNS peers are now reached automatically without
+  manual node.json entries
 
 ## What Was Just Completed (v0.11.0 — InsecureSkipVerify=false, Cert Chain Verification)
 
@@ -186,17 +213,16 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. Deploy v0.11.0 to Node-2: git pull, go build, restart daemon
+1. Deploy v0.11.1 to Node-2: git pull, go build, restart daemon
 2. Run CA setup on Node-1 (bootstrap): `vernex-node ca init && vernex-node ca init-intermediate`
 3. Set `is_bootstrap: true` in Node-1 config/node.json, restart daemon
 4. Generate enrollment token on Node-1, enroll Node-2: `vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'`
-5. Verify cert_verified=true appears in `/peers` after Node-2 re-registers post-enrollment
-6. Wire /ca-sync gossip into heartbeat — auto-propagate root+intermediate certs to new nodes
-7. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
-8. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
-9. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
-10. Rename "Social" → "Compute Donation" in dashboard and daemon
-11. Version string auto-detection from source instead of hardcoded
+5. Verify cert_verified=true appears in `/peers` after Node-2 re-registers post-enrollment (CertVerified race now fixed)
+6. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
+7. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
+8. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
+9. Rename "Social" → "Compute Donation" in dashboard and daemon
+10. Version string auto-detection from source instead of hardcoded
 
 ## Design Constraints (never violate)
 - All cryptography must become post-quantum resistant (ML-DSA + ML-KEM, NIST FIPS 203/204)
@@ -270,4 +296,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.11.0. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA layer (v0.10.0): Root CA → Intermediate CA → Compute Node cert chain; Shamir K-of-N threshold root. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify: true literals in source; TOFU TLS with VerifyTLSPeerCert; cert_verified per peer in /peers; 6-test suite passing. Next: deploy on Node-2, run CA init + enrollment workflow, verify cert_verified=true. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*
+*Vernex Protocol v0.11.1. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA layer (v0.10.0): Root CA → Intermediate CA → Compute Node cert chain; Shamir K-of-N threshold root. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify: true literals in source; TOFU TLS with VerifyTLSPeerCert; cert_verified per peer in /peers; 6-test suite passing. v0.11.1 fixes: CertVerified re-register race (PeerRegistry.SetCertVerified + preserve on heartbeat), PullCASync at startup for non-bootstrap nodes, mDNS-discovered peers added to heartbeat sweep via dynamicPeers map. Next: deploy on Node-2, run CA init + enrollment workflow, verify cert_verified=true stays true across heartbeats. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*
