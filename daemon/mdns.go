@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+
+	vernexca "vernex/daemon/ca"
 )
 
 // registerMDNSViaAvahi registers this node as a _vernex._tcp service through the system
@@ -213,28 +215,46 @@ func startMDNS(node *Node) {
 						fmt.Printf("  [✓] mDNS discovered trusted peer: %s at %s\n", peer.nodeID, peerAPIURL)
 					}
 				} else {
-					tr := TrustRequest{
-						NodeID:      peer.nodeID,
-						PublicKey:   peer.pubKey,
-						APIUrl:      peerAPIURL,
-						RequestedAt: time.Now(),
-						SourceIP:    peer.addr,
-					}
-					node.trustMu.Lock()
-					replaced := false
-					for i := range node.trustRequests {
-						if node.trustRequests[i].NodeID == peer.nodeID {
-							node.trustRequests[i] = tr
-							replaced = true
-							break
+					// CA cert check: auto-trust peers whose cert chain validates against
+					// the local TrustStore, avoiding manual approval for enrolled nodes.
+					cert, cerr := vernexca.FetchPeerCert(peerAPIURL, node.buildPeerTLSClient(5*time.Second))
+					if cerr == nil && node.trustStore.VerifyCert(*cert) == nil {
+						node.peerRegistry.Register(PeerEntry{
+							NodeID:       peer.nodeID,
+							APIURL:       peerAPIURL,
+							LastSeen:     time.Now(),
+							CertVerified: true,
+						})
+						node.dynamicPeersMu.Lock()
+						node.dynamicPeers[peer.nodeID] = peerAPIURL
+						node.dynamicPeersMu.Unlock()
+						if !alreadyKnown {
+							fmt.Printf("  [✓] mDNS auto-trust: %s cert chain verified\n", peer.nodeID)
 						}
-					}
-					if !replaced {
-						node.trustRequests = append(node.trustRequests, tr)
-					}
-					node.trustMu.Unlock()
-					if !alreadyKnown {
-						fmt.Printf("  [↑] mDNS discovered unknown peer: %s at %s — trust request queued\n", peer.nodeID, peerAPIURL)
+					} else {
+						tr := TrustRequest{
+							NodeID:      peer.nodeID,
+							PublicKey:   peer.pubKey,
+							APIUrl:      peerAPIURL,
+							RequestedAt: time.Now(),
+							SourceIP:    peer.addr,
+						}
+						node.trustMu.Lock()
+						replaced := false
+						for i := range node.trustRequests {
+							if node.trustRequests[i].NodeID == peer.nodeID {
+								node.trustRequests[i] = tr
+								replaced = true
+								break
+							}
+						}
+						if !replaced {
+							node.trustRequests = append(node.trustRequests, tr)
+						}
+						node.trustMu.Unlock()
+						if !alreadyKnown {
+							fmt.Printf("  [↑] mDNS discovered unknown peer: %s — no valid cert, queued for manual approval\n", peer.nodeID)
+						}
 					}
 				}
 			}
