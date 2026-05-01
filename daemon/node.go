@@ -190,7 +190,7 @@ func NewNode(cfg NodeConfig, configDir string, privKey ed25519.PrivateKey, pubKe
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.11.5",
+			Version:           "0.12.0",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -257,7 +257,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.11.5 — Patent Pending       ║")
+	fmt.Println("║       v0.12.0 — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Ed25519   : %s\n", base64.StdEncoding.EncodeToString(n.publicKey))

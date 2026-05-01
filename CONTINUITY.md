@@ -1,16 +1,67 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-April 30, 2026 (session 13)
+May 1, 2026 (session 14)
 
 ## Current Version
-v0.11.5
+v0.12.0
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
 | vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | systemd auto-start — bootstrap node |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
+
+## What Was Just Completed (v0.12.0 — clock verification, /time endpoint, CA ops gated)
+
+### daemon/ca/clockcheck.go — new file
+
+Four-step system clock verification gating CA operations:
+
+**Step A — build-timestamp consistency**: if `-ldflags "-X vernex/daemon/ca.BuildTime=<RFC3339>"` is set at build time and `time.Now()` is before that timestamp, `BlockCAOps=true`. Prevents ops on a clock-rewound system.
+
+**Step B — last-known-good regression**: `config/last_seen_time.json` stores the last verified UTC time. If `time.Now()` is more than 24h *before* the stored time, `BlockCAOps=true`. Prevents backwards clock jumps between restarts.
+
+**Step C — NTP median consensus (pure UDP, RFC 5905)**: queries `time.cloudflare.com:123`, `0.pool.ntp.org:123`, `1.pool.ntp.org:123` in parallel (3-second timeout each). Sends 48-byte NTP request (LI=0, VN=4, Mode=3), reads transmit timestamp from bytes 40–47, converts NTP epoch (Jan 1 1900, constant 2208988800s) to Unix time. Takes median of successful responses. Drift >5 min → `BlockCAOps=true`; drift >1 min → warning only; all timeout → fall through to Step D.
+
+**Step D — bootstrap /time fallback**: GET `{bootstrapURL}/time` (5s timeout). Verifies ML-DSA signature over `utc+"|"+node_id` using the peer's VernexCert when `TrustStore.RootCert != nil` (enrolled mode); accepts without verification in TOFU mode. Saves `last_seen_time.json` on success.
+
+`BlockIfClockInvalid(status ClockStatus) error` — returns error iff `BlockCAOps=true`.
+
+### daemon/ca/clockcheck_test.go — 7 tests, all passing
+
+1. `TestBuildTimeUnset` — no block
+2. `TestBuildTimeFuture` — BlockCAOps=true, Source="build"
+3. `TestClockBackwardsMoreThan24h` — BlockCAOps=true, Source="persisted"
+4. `TestNTPDriftSmall` — mock NTP +30s, Verified=true, no block
+5. `TestNTPDriftLarge` — mock NTP +10min, BlockCAOps=true, Source="ntp"
+6. `TestAllNTPTimeoutNoBootstrap` — empty ntpServers + nil bootstrap, Source="unverified", no block
+7. `TestLastSeenTimeWritten` — file written after successful NTP check
+
+Mock NTP server in test helper: UDP listener on random port, returns caller-controlled timestamp. `ntpServers` var overridable per-test.
+
+### daemon/handlers.go — /time endpoint + clock guards
+
+**GET /time** (public, rate-limited): returns `{"utc","unix","node_id","signature"}` where signature is ML-DSA over `utc+"|"+node_id`. Used by peers for Step D bootstrap time consensus.
+
+**Clock guards** on `/sign-intermediate`, `/enroll`, `/token-gen`: each reads `node.clockStatus` under `node.mu.RLock()` and calls `BlockIfClockInvalid`; returns HTTP 503 if blocked.
+
+### daemon/node.go — clockStatus field
+
+`clockStatus vernexca.ClockStatus` added to Node struct. Written under `node.mu.Lock()` in main() and background goroutine; read under `node.mu.RLock()` in CA handlers.
+
+### daemon/main.go — wiring
+
+- `resolveBootstrapNodes(cfg NodeConfig) []string` — converts peer_nodes BaseURLs to HTTPS API URLs for clock check Step D
+- Clock check runs synchronously after `printBanner()`; result printed as `[✓]/[~]/[!]` clock line
+- Background goroutine re-checks every 30 minutes; logs `[!]` if drift exceeds threshold
+
+### Build note
+Set `BuildTime` for production builds:
+```bash
+go build -ldflags "-X vernex/daemon/ca.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o vernex-node .
+```
+Leave unset (default `""`) for local dev to skip the build-time check.
 
 ## What Was Just Completed (v0.11.5 — bootstrap provisioning script + enrollment in node-setup)
 
@@ -286,20 +337,20 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - **Distributed CA (v0.10.0)**: Root CA → Intermediate CA → Compute Node cert chain; ML-DSA 44 signed;
   VernexCert JSON format (DER migration deferred to Go 1.24+); Shamir K-of-N for threshold root
 - TLS on port 7701 — self-signed cert from ed25519 keypair; InsecureSkipVerify centralized in TrustStore.NewTLSClient() with TOFU logging (v0.11.0); full chain enforcement pending CA-signed TLS certs
+- **System clock verification (v0.12.0)**: four-step guard (build timestamp → last-known-good regression → NTP median → bootstrap /time); BlockCAOps gates /sign-intermediate, /enroll, /token-gen; `last_seen_time.json` persists verified time; build with `-ldflags "-X vernex/daemon/ca.BuildTime=..."` for production
 - Sliding window rate limiter — 60 req/min, per node ID or IP
 - Replay protection — 30s timestamp window on inter-node requests
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. Run `bash scripts/vernex-bootstrap-setup.sh` on Node-1 to complete CA init + generate enrollment tokens
-2. Deploy v0.11.5 to Node-2: git pull, go build, restart daemon
+1. Deploy v0.12.0 to Node-2: git pull, `go build -ldflags "-X vernex/daemon/ca.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o vernex-node .`, restart daemon
+2. Run `bash scripts/vernex-bootstrap-setup.sh` on Node-1 to complete CA init + generate enrollment tokens
 3. Enroll Node-2 using a token from Node-1: `bash scripts/vernex-node-setup.sh` (Section B) or manually with `vernex-node ca enroll`
 4. Verify cert_verified=true appears in `/peers` after Node-2 re-registers post-enrollment
 5. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
 6. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
 7. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
 8. Rename "Social" → "Compute Donation" in dashboard and daemon
-9. Version string auto-detection from source instead of hardcoded
 
 ## Design Constraints (never violate)
 - All cryptography must become post-quantum resistant (ML-DSA + ML-KEM, NIST FIPS 203/204)
@@ -373,4 +424,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.11.5. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA layer (v0.10.0): Root CA → Intermediate CA → Compute Node cert chain; Shamir K-of-N threshold root. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify: true literals in source; TOFU TLS with VerifyTLSPeerCert; cert_verified per peer in /peers; 6-test suite passing. v0.11.1 fixes: CertVerified re-register race, PullCASync at startup, mDNS heartbeat wiring. v0.11.2: daemon/main.go split into 9 focused files. v0.11.3: IPv6 URL bracketing + IPv4-preference dedup in mDNS. v0.11.4: mDNS auto-trust — CA-enrolled LAN peers join automatically via cert chain check. v0.11.5: scripts/vernex-bootstrap-setup.sh (10-section full bootstrap provisioning) + Sections A/B in vernex-node-setup.sh (DNS discovery + enrollment). Next: run vernex-bootstrap-setup.sh on Node-1 to complete CA init, enroll Node-2. Patent pending US App. 64/015,885, deadline March 24 2027. CONTINUITY.md and CLAUDE.md in repo root have full context.*
+*Vernex Protocol v0.12.0. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1: CertVerified race fix, PullCASync at startup, mDNS heartbeat. v0.11.2: main.go split to 9 files. v0.11.3: IPv6 mDNS fix. v0.11.4: mDNS auto-trust. v0.11.5: bootstrap-setup.sh + enrollment in node-setup.sh. v0.12.0: ca/clockcheck.go — 4-step clock verification (build timestamp, last-known-good, NTP median RFC5905, bootstrap /time); BlockCAOps gates CA endpoints; GET /time with ML-DSA sig; 7 new tests; build with -ldflags BuildTime in prod. Next: deploy v0.12.0 on Node-2, run bootstrap-setup.sh on Node-1, enroll Node-2. Patent pending US App. 64/015,885, deadline March 24 2027.*
