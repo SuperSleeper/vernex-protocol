@@ -59,6 +59,17 @@ done
 
 sudo -n true 2>/dev/null || warn "sudo requires a password for some steps — you may be prompted."
 
+echo
+read -rp "  Is this a NEW bootstrap node (not previously set up)? (y/N): " _CONFIRM
+case "${_CONFIRM}" in
+    [yY]|[yY][eE][sS]) ;;
+    *)
+        err "This script is for bootstrap nodes only."
+        err "For compute nodes run: bash scripts/vernex-node-setup.sh"
+        exit 1
+        ;;
+esac
+
 info "Detecting public IP via api.ipify.org"
 PUBLIC_IP="$(curl -s --connect-timeout 5 https://api.ipify.org 2>/dev/null || echo '')"
 if [[ -z "${PUBLIC_IP}" ]]; then
@@ -209,6 +220,11 @@ fi
 if [[ -f "${CONFIG_DIR}/intermediate.crt" ]]; then
     ok "Intermediate CA already exists — skipping ca init-intermediate"
 else
+    if [[ ! -f "${CONFIG_DIR}/root.key" ]]; then
+        err "[!] root.key not found — cannot create intermediate CA"
+        err "    Run 'vernex-node ca init' first to create the root CA"
+        exit 1
+    fi
     info "Generating intermediate CA"
     ./vernex-node ca init-intermediate || die "ca init-intermediate failed"
     ok "Intermediate CA created: config/intermediate.{key,csr,crt}"
