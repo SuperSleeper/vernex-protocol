@@ -1,29 +1,23 @@
 # Vernex Protocol
 
-Distributed home-node compute network with value-aware token priority scheduling, social compute partitioning, and intelligent request classification.
+Distributed home-node compute network with value-aware token
+priority scheduling, social compute partitioning, and intelligent
+request classification.
 
-> Patent Pending — USPTO Provisional No. 64/015,885 (filed March 24, 2026)
+**Patent Pending — USPTO Provisional No. 64/015,885**
+*(Filed March 24, 2026)*
 
-## What Is Vernex?
+---
 
-Vernex is a peer-to-peer compute protocol that lets ordinary computers share AI inference workloads — without cloud infrastructure, without central servers, and without trusting any single operator.
+## Philosophy: AI for the People
 
-Each node runs a Go daemon that handles:
-- Routing AI requests across enrolled peers using a priority queue.
-- Enforcing compute fairness via a patented Class 1/2 token scheduler with Commons Review consent gate.
-- Securing all traffic with hybrid post-quantum cryptography (ed25519 + ML-DSA 44).
-- Auto-discovering and trusting peers on the LAN via mDNS + a distributed CA chain.
+Vernex is built to provide true anonymity and compute sovereignty.
+We believe powerful AI tools should belong to individuals, not
+centralized entities. Our architecture is designed to resist
+surveillance, data harvesting, and centralized control.
+We are building a Guardian protocol for private intelligence.
 
-The goal: democratize inference compute the same way BitTorrent democratized file distribution.
-
-## Who Is Vernex For?
-
-Vernex is designed for those seeking compute sovereignty — running AI workloads on hardware they own, without paying cloud bills or surrendering data to third parties.
-
-- **Home Lab Enthusiasts:** Pool idle compute across your own machines.
-- **Privacy-Focused Developers:** AI inference without cloud data exposure.
-- **Startups:** Avoid high AWS/GCP inference costs at small scales.
-- **Security Researchers:** Interested in post-quantum mesh protocols.
+---
 
 ## Architecture
 
@@ -33,116 +27,150 @@ Vernex is designed for those seeking compute sovereignty — running AI workload
 |   Bootstrap Node    |               |     Compute Node      |
 |  (Port 7701/7700)   |               |   (Behind Firewall)   |
 +----------+----------+               +-----------+-----------+
-           |                                     |
-           | <--- (1) Discovery/Enrollment ----  |
-           |      (Signed Single-use Token)      |
-           |                                     |
-           | <--- (2) UDP Hole Punching -------  |
-           |      (STUN-style Handshake)         |
-           |                                     |
+           |                                      |
+           | <-- (1) Discovery / Enrollment ----  |
+           |       Signed single-use token        |
+           |                                      |
+           | <-- (2) UDP Hole Punching ---------- |
+           |       STUN-style NAT traversal       |
+           |                                      |
 +----------v----------+               +-----------v-----------+
-|  Distributed Root   |               |  Token Scheduler      |
-|  CA (Shamir K-of-N) |               |  (Class 1 vs Class 2) |
+|  Distributed Root   |               |    Token Scheduler    |
+|  CA  (Shamir K-of-N)|               |  (Class 1 / Class 2)  |
 +---------------------+               +-----------+-----------+
                                                   |
                                       +-----------v-----------+
-                                      |  Local AI Inference   |
-                                      |  (Ollama / Port 11434)|
+                                      |   Local AI Inference  |
+                                      |  Ollama  port 11434   |
                                       +-----------------------+
 ```
 
-## Token Priority Scheduler (Patented)
+---
 
-Requests are classified into two classes:
+## Token Priority Scheduler (Patent Pending)
 
-| Class | Description | Examples |
-|---|---|---|
-| Class 1 | Personal compute — operator's own workloads | Local AI assistant, private queries |
-| Class 2 | Social compute — shared network workloads | Peer-routed requests, Commons pool |
+Per USPTO No. 64/015,885, requests are classified to ensure
+network health and operator sovereignty:
 
-A Commons Review consent gate governs the Class 1/2 boundary. Operators set their own partition ratio (default 70/30). This scheduling mechanism ensures you always get priority on your own hardware, while social compute only runs in the capacity you explicitly allow.
+| Class | Description | Priority | Examples |
+|-------|-------------|----------|---------|
+| Class 1 | Community Compute — benefits the network | Higher | Peer-routed requests, Commons tasks |
+| Class 2 | Personal Compute — benefits only the requester | Lower | Private queries, local AI assistant |
+
+The **Commons Review consent gate** ensures the AI may *suggest*
+upgrading a Class 2 request to Class 1 but cannot reclassify
+without explicit user consent. This mechanism is the core
+patented invention.
+
+---
 
 ## Security Stack
 
-Vernex assumes no peer is trustworthy until the CA chain says otherwise. The stack is designed to remain secure even against future quantum adversaries.
+| Layer | Technology |
+|-------|-----------|
+| Post-quantum signatures | ML-DSA 44 (NIST FIPS 204 / CRYSTALS-Dilithium) |
+| Node identity | Hybrid ed25519 + ML-DSA 44 keypair |
+| Enrollment | Distributed CA — Root → Intermediate → Node cert chain |
+| NAT traversal | UDP hole punching (STUN-style, no port forwarding needed) |
+| Replay protection | 30-second timestamp window on all signed requests |
+| Clock integrity | NTP consensus + ML-DSA signed bootstrap /time endpoint |
+| Token burn | Single-use enrollment tokens, burned on first use |
 
-| Layer | Mechanism |
-|---|---|
-| Transport | TLS 1.2+ on all inter-node HTTPS (7701); raw TCP (7700) protected by app-layer signatures |
-| Identity | ed25519 node keypairs (deterministic node ID) |
-| Post-quantum | ML-DSA 44 (NIST FIPS 204) on all request signatures |
-| Hybrid Signing | Every request carries both ed25519 + ML-DSA 44 headers |
-| CA Chain | Root → Intermediate → Compute Node (distributed CA) |
-| Enrollment | Zero-touch via signed single-use tokens |
-| LAN Trust | mDNS auto-trust — CA-enrolled peers join automatically |
-| Clock | NTP + bootstrap /time consensus — CA ops gated on drift < 5 min |
-| Replay Protection | 30-second timestamp window on all signed requests |
-| Trust Persistence | Verified peer CNs persisted across restarts |
+---
 
 ## Quick Start
 
-### 1. Bootstrap Node (Public IP required)
+### Bootstrap Node (public IP required)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SuperSleeper/vernex-protocol/main/scripts/vernex-bootstrap-setup.sh | bash
 ```
 
-### 2. Compute Node
-
-Requirement: Ollama must be installed and running.
+### Compute Node (home network, behind NAT)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SuperSleeper/vernex-protocol/main/scripts/vernex-node-setup.sh | bash
-# Enter bootstrap address and enrollment token when prompted
 ```
 
-### 3. Build from Source
+### Build from Source
 
 ```bash
 git clone https://github.com/SuperSleeper/vernex-protocol
 cd vernex-protocol/daemon
-go build -ldflags "-X vernex/daemon/ca.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o vernex-node .
-./vernex-node
+go build -ldflags \
+  "-X vernex/daemon/ca.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -o vernex-node .
 ```
 
-**Requirements:** Go 1.21+, avahi-daemon (mDNS), Ollama (inference)
+---
+
+## Requirements
+
+- Go 1.21+
+- Linux (Pop!_OS or Ubuntu 22.04/24.04 recommended)
+- avahi-daemon (mDNS peer discovery)
+- Ollama (local AI inference)
+
+---
 
 ## Project Structure
 
 ```
 daemon/
-  main.go        — Entry point & signal handling (start here for bug triage)
-  scheduler.go   — Token scheduler & Commons Review (core patented logic)
-  ca/            — Root, Intermediate, and Sync logic for the distributed CA
-scripts/         — Provisioning and node-wipe utilities
+  main.go        — Startup and orchestration
+  config.go      — NodeConfig, loadConfig
+  node.go        — Node struct, stats, banner
+  peer.go        — PeerRegistry, heartbeat
+  mdns.go        — mDNS registration and auto-trust discovery
+  punch.go       — UDP hole punching, IP watchdog
+  scheduler.go   — Token scheduler, Commons Review (patented)
+  inference.go   — Ollama routing, Brave Search
+  tls.go         — TLS config, keypair management
+  handlers.go    — HTTP API endpoints
+  ca/
+    root.go           — Root CA, Shamir K-of-N split
+    intermediate.go   — Intermediate CA, CSR signing
+    enrollment.go     — Token lifecycle, zero-touch enroll
+    sync.go           — /ca-sync gossip
+    verify.go         — TrustStore chain validation
+    clockcheck.go     — NTP + bootstrap time consensus
+scripts/
+  vernex-bootstrap-setup.sh  — Bootstrap node provisioning
+  vernex-node-setup.sh       — Compute node setup + enrollment
 ```
 
-## Roadmap
+---
 
-- [ ] ML-KEM hybrid key exchange (NIST FIPS 203) — full post-quantum transport
-- [ ] Multi-operator root CA with Shamir threshold signing
-- [ ] Zero-touch USB provisioning image
-- [ ] Contribution scoring + node incentive model
-- [ ] Web dashboard (replace Flask)
-- [ ] Public bootstrap network
+## Contributing
 
-## DNS Discovery
+Contributions that advance privacy, decentralization, and
+compute sovereignty are welcome.
 
-Bootstrap nodes publish a DNS TXT record:
+**Patent Note:** The core scheduling and Commons Review consent
+gate mechanism is protected under USPTO Provisional Application
+No. 64/015,885. The patent serves as a legal shield to ensure
+the protocol is not misappropriated by actors who do not respect
+user privacy.
 
-```
-_vernex._tcp.vernex.net  →  bootstrap=76.244.40.49:7701
-```
+---
 
-Compute nodes resolve this automatically during enrollment.
+## License
 
-## Contributing & Patent Note
+Vernex Protocol is released under the
+**Business Source License 1.1**.
 
-Contributions are welcome, particularly in Go backend logic and security auditing.
+- **Individuals and non-commercial use:** Free to use, modify,
+  and distribute for personal or research purposes.
+- **Prohibited uses:** See LICENSE file and The Guardian Clause.
+- **Commercial use:** Entities using Vernex for direct profit
+  or as a managed service must obtain a commercial license.
+- **The Commons Promise:** Every release of Vernex automatically
+  converts to the Apache 2.0 license four (4) years after its
+  initial publication date.
 
-**Regarding the Patent:** The core scheduling and consent-gate mechanism is patent pending (USPTO 64/015,885). We intend to provide a permissive patent grant for non-commercial and open-source use — details to be formalized before v1.0.
+---
 
 ## Author
 
-Eric Geer — Senior Network Engineer  
-vernex.net · vernex.org · GitHub: @SuperSleeper
+**Eric Geer** — Senior Network Engineer
+[vernex.net](https://vernex.net) · [vernex.org](https://vernex.org) · GitHub: [@SuperSleeper](https://github.com/SuperSleeper)
