@@ -8,6 +8,7 @@ import time
 app = Flask(__name__)
 
 LOCAL_URL = "https://localhost:7701"
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PEERS_TTL = 5.0  # seconds between /peers refreshes
 
 _peers_lock = threading.Lock()
@@ -398,6 +399,17 @@ def ui():
     return send_from_directory(os.path.dirname(__file__), "index.html")
 
 
+@app.route("/install")
+def install_script():
+    script = os.path.join(_REPO_ROOT, "vernex-node-setup.sh")
+    if not os.path.exists(script):
+        return (
+            "# vernex-node-setup.sh not found on this bootstrap node.\n"
+            "# Get it from: https://raw.githubusercontent.com/SuperSleeper/vernex-protocol/main/vernex-node-setup.sh\n"
+        ), 404, {"Content-Type": "text/plain"}
+    return send_from_directory(_REPO_ROOT, "vernex-node-setup.sh", mimetype="text/plain")
+
+
 @app.route("/api/nodes")
 def api_nodes():
     nodes = {}
@@ -484,4 +496,5 @@ def api_trust_deny():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    host = os.environ.get("VERNEX_DASHBOARD_HOST", "0.0.0.0")
+    app.run(host=host, port=5000, debug=False)
