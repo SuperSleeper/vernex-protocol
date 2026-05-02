@@ -318,12 +318,28 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 				LastSeen:     time.Now(),
 				PushedStatus: req.Status,
 			}
-			// Preserve verified state from async cert-verify — re-register must not reset it.
-			if existing, ok := node.peerRegistry.GetByNodeID(req.NodeID); ok && existing.CertVerified {
-				entry.CertVerified = true
+			// Preserve CertVerified and TrustApproved state across re-registers.
+			// Also check cfg.PeerNodes: if this NodeID was previously trust-approved,
+			// Name is set to the NodeID by the /trust-approve handler.
+			node.mu.RLock()
+			for _, p := range node.cfg.PeerNodes {
+				if p.Name == req.NodeID {
+					entry.TrustApproved = true
+					break
+				}
+			}
+			node.mu.RUnlock()
+			if existing, ok := node.peerRegistry.GetByNodeID(req.NodeID); ok {
+				if existing.CertVerified {
+					entry.CertVerified = true
+				}
+				if existing.TrustApproved {
+					entry.TrustApproved = true
+				}
 			}
 			node.peerRegistry.Register(entry)
-			fmt.Printf("  [↔] registered peer  id=%s  ext=%s:%d\n", req.NodeID, req.ExternalIP, req.ExternalPort)
+			fmt.Printf("  [↔] registered peer  id=%s  trusted=%v  ext=%s:%d\n",
+				req.NodeID, entry.TrustApproved, req.ExternalIP, req.ExternalPort)
 			go func(apiURL, nodeID string) {
 				cert, err := vernexca.FetchPeerCert(apiURL, node.buildPeerTLSClient(5*time.Second))
 				if err != nil {
@@ -335,6 +351,7 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 					return
 				}
 				node.peerRegistry.SetCertVerified(nodeID, true)
+				node.peerRegistry.SetTrustApproved(nodeID, true)
 				fmt.Printf("  [✓] cert-verify: VERIFIED %s\n", nodeID)
 			}(req.APIURL, req.NodeID)
 			w.Header().Set("Content-Type", "application/json")
@@ -354,6 +371,7 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 				ConnectionType string `json:"connection_type"`
 				LastSeenAgoSec int64  `json:"last_seen_ago_sec"`
 				CertVerified   bool   `json:"cert_verified"`
+				TrustApproved  bool   `json:"trust_approved"`
 			}
 			out := make([]peerOut, 0, len(peers))
 			for _, p := range peers {
@@ -365,6 +383,7 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 					ConnectionType: node.connectionType(p),
 					LastSeenAgoSec: int64(time.Since(p.LastSeen).Seconds()),
 					CertVerified:   p.CertVerified,
+					TrustApproved:  p.TrustApproved,
 				})
 			}
 			json.NewEncoder(w).Encode(out)
@@ -484,6 +503,7 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 			if err := saveConfig(cfgSnap); err != nil {
 				fmt.Printf("  [!] trust-approve: save config failed: %v\n", err)
 			}
+			node.peerRegistry.SetTrustApproved(found.NodeID, true)
 			fmt.Printf("  [✓] trust approved  id=%s  url=%s\n", found.NodeID, found.APIUrl)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"status": "approved", "node_id": found.NodeID})

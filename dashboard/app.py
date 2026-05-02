@@ -28,7 +28,7 @@ def get_nodes() -> dict:
     with _peers_lock:
         if now - _peers_last_fetch < _PEERS_TTL:
             return dict(_peers_cache)
-        nodes = {"local": {"url": LOCAL_URL, "connection_type": "local"}}
+        nodes = {"local": {"url": LOCAL_URL, "connection_type": "local", "trust_approved": True}}
         try:
             r = requests.get(f"{LOCAL_URL}/peers", timeout=2, verify=False)
             for entry in r.json():
@@ -36,7 +36,11 @@ def get_nodes() -> dict:
                 api_url = entry.get("api_url", "")
                 conn_type = entry.get("connection_type", "relayed")
                 if node_id and api_url:
-                    nodes[node_id] = {"url": api_url, "connection_type": conn_type}
+                    nodes[node_id] = {
+                        "url": api_url,
+                        "connection_type": conn_type,
+                        "trust_approved": entry.get("trust_approved", False),
+                    }
         except Exception:
             pass
         _peers_cache = nodes
@@ -123,7 +127,7 @@ DASHBOARD_HTML = """
   <!-- Cards view (default) -->
   <div class="grid" id="cards-view">
     {% for name, data in nodes.items() %}
-    {% set pending = data.online and data.node_id in trust_map %}
+    {% set pending = data.online and not data.trust_approved %}
     <div class="card {% if pending %}pending{% elif data.online %}online{% else %}offline{% endif %}"
          id="tr-{{ data.node_id if data.online else name }}">
       <div class="node-header">
@@ -193,8 +197,10 @@ DASHBOARD_HTML = """
       </div>
 
       {% if pending %}
+      {% if data.node_id in trust_map %}
       {% set tr = trust_map[data.node_id] %}
       <div class="card-trust-info">
+        <strong>⚠ Awaiting operator approval</strong><br>
         key: {{ tr.public_key[:28] }}… &nbsp;|&nbsp;
         from {{ tr.source_ip }} &nbsp;|&nbsp;
         {{ tr.requested_at[:19] }} &nbsp;|&nbsp;
@@ -204,6 +210,13 @@ DASHBOARD_HTML = """
         <button class="btn-approve" onclick="approveTrust('{{ data.node_id }}')">APPROVE</button>
         <button class="btn-deny"    onclick="denyTrust('{{ data.node_id }}')">DENY</button>
       </div>
+      {% else %}
+      <div class="card-trust-info">
+        <strong>⚠ Awaiting operator approval</strong><br>
+        Node is sending heartbeats but has not submitted a trust request yet.<br>
+        The node's installer will send one automatically. You can also deny it here once it appears.
+      </div>
+      {% endif %}
       {% endif %}
       {% endif %}
     </div>
@@ -229,7 +242,7 @@ DASHBOARD_HTML = """
       </thead>
       <tbody>
         {% for name, data in nodes.items() %}
-        {% set pending = data.online and data.node_id in trust_map %}
+        {% set pending = data.online and not data.trust_approved %}
         <tr class="{{ 'ct-pending' if pending else '' }}"
             id="tr-ct-{{ data.node_id if data.online else name }}">
           <td>
@@ -251,11 +264,13 @@ DASHBOARD_HTML = """
           <td style="color:#3fb950;">{{ "%.1f"|format(data.contribution_score) if data.online else '—' }}</td>
           <td style="color:#8b949e;">{{ 'v' + data.version if data.online else '—' }}</td>
           <td>
-            {% if pending %}
+            {% if pending and data.node_id in trust_map %}
             <div style="display:flex; gap:0.35rem;">
               <button class="btn-approve" onclick="approveTrust('{{ data.node_id }}')">APPROVE</button>
               <button class="btn-deny"    onclick="denyTrust('{{ data.node_id }}')">DENY</button>
             </div>
+            {% elif pending %}
+            <span style="color:#d29922; font-size:0.7rem;">awaiting trust req</span>
             {% endif %}
           </td>
         </tr>
@@ -338,6 +353,7 @@ def index():
     for name, node_info in nodes_map.items():
         url = node_info["url"] if isinstance(node_info, dict) else node_info
         conn_type = node_info.get("connection_type", "relayed") if isinstance(node_info, dict) else "local"
+        trust_approved = node_info.get("trust_approved", True) if isinstance(node_info, dict) else True
         via_relay = False
         d = None
 
@@ -357,11 +373,12 @@ def index():
                     pass
 
         if d is None:
-            nodes[name] = {"online": False}
+            nodes[name] = {"online": False, "trust_approved": trust_approved}
             continue
 
         nodes[name] = {
             "online": True,
+            "trust_approved": trust_approved,
             "node_id": d["node_id"],
             "uptime": fmt_uptime(d["uptime_seconds"]),
             "total_connections": d["total_connections"],

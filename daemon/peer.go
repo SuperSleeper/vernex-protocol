@@ -14,13 +14,14 @@ const peerLiveTTL = 90 * time.Second
 
 // PeerEntry is a node that has registered itself with this node.
 type PeerEntry struct {
-	NodeID       string          `json:"node_id"`
-	APIURL       string          `json:"api_url"`
-	ExternalIP   string          `json:"external_ip,omitempty"`
-	ExternalPort int             `json:"external_port,omitempty"`
-	LastSeen     time.Time       `json:"last_seen"`
-	PushedStatus json.RawMessage `json:"pushed_status,omitempty"` // last /status payload pushed on heartbeat
-	CertVerified bool            `json:"cert_verified"`           // true if VernexCert chain verified via TrustStore
+	NodeID        string          `json:"node_id"`
+	APIURL        string          `json:"api_url"`
+	ExternalIP    string          `json:"external_ip,omitempty"`
+	ExternalPort  int             `json:"external_port,omitempty"`
+	LastSeen      time.Time       `json:"last_seen"`
+	PushedStatus  json.RawMessage `json:"pushed_status,omitempty"` // last /status payload pushed on heartbeat
+	CertVerified  bool            `json:"cert_verified"`            // true if VernexCert chain verified via TrustStore
+	TrustApproved bool            `json:"trust_approved"`           // true if operator approved or CA-verified
 }
 
 // PeerRegistry holds in-memory heartbeat registrations from peer nodes.
@@ -58,6 +59,20 @@ func (pr *PeerRegistry) SetCertVerified(nodeID string, verified bool) bool {
 		return false
 	}
 	e.CertVerified = verified
+	pr.entries[nodeID] = e
+	return true
+}
+
+// SetTrustApproved atomically marks a peer as operator-approved or CA-verified.
+// Returns false if the peer is no longer in the registry.
+func (pr *PeerRegistry) SetTrustApproved(nodeID string, approved bool) bool {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	e, ok := pr.entries[nodeID]
+	if !ok {
+		return false
+	}
+	e.TrustApproved = approved
 	pr.entries[nodeID] = e
 	return true
 }
