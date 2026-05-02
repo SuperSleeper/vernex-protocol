@@ -130,15 +130,37 @@ func deriveOllamaURL(apiURL string) string {
 // registerWithPeers POSTs our node_id, api_url, external endpoint, and current status
 // to each peer's /register endpoint. Failures are logged but not fatal — peers will pick
 // us up on the next heartbeat. extIP/extPort are the STUN-discovered external address (may be empty).
+// Static peer_nodes entries whose hostname is already reachable via mDNS are skipped —
+// the mDNS heartbeat loop covers them, avoiding redundant WAN traffic for LAN peers.
 func registerWithPeers(node *Node, extIP string, extPort int) {
 	cfg := node.cfg
 	ownAPIPort := cfg.APIPort
 	statusJSON, _ := json.Marshal(getOwnStatus(node))
+
+	// Snapshot dynamic peers once; also build a hostname set for LAN-skip logic below.
+	node.dynamicPeersMu.RLock()
+	dynamicSnapshot := make(map[string]string, len(node.dynamicPeers))
+	mDNSHosts := make(map[string]struct{}, len(node.dynamicPeers))
+	for id, u := range node.dynamicPeers {
+		dynamicSnapshot[id] = u
+		if parsed, err := url.Parse(u); err == nil {
+			mDNSHosts[parsed.Hostname()] = struct{}{}
+		}
+	}
+	node.dynamicPeersMu.RUnlock()
+
 	for _, peer := range cfg.PeerNodes {
 		apiURL, err := peerAPIURL(peer)
 		if err != nil {
 			fmt.Printf("  [!] heartbeat: bad peer URL %q: %v\n", peer.BaseURL, err)
 			continue
+		}
+		// Peer already on the LAN via mDNS — the dynamic loop below will heartbeat it.
+		if parsed, err := url.Parse(apiURL); err == nil {
+			if _, lanPeer := mDNSHosts[parsed.Hostname()]; lanPeer {
+				fmt.Printf("  [~] heartbeat: skipping %s — already reachable via mDNS\n", peer.Name)
+				continue
+			}
 		}
 		host, err := url.Parse(peer.BaseURL)
 		if err != nil {
@@ -167,14 +189,7 @@ func registerWithPeers(node *Node, extIP string, extPort int) {
 		fmt.Printf("  [✓] heartbeat: registered with %s (%s)\n", peer.Name, apiURL)
 	}
 
-	// Heartbeat to mDNS-discovered peers not present in static peer_nodes config.
-	node.dynamicPeersMu.RLock()
-	dynamicSnapshot := make(map[string]string, len(node.dynamicPeers))
-	for id, u := range node.dynamicPeers {
-		dynamicSnapshot[id] = u
-	}
-	node.dynamicPeersMu.RUnlock()
-
+	// Heartbeat to mDNS-discovered peers.
 	for peerNodeID, peerURL := range dynamicSnapshot {
 		parsed, err := url.Parse(peerURL)
 		if err != nil {
