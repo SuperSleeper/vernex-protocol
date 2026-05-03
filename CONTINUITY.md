@@ -4,13 +4,37 @@
 May 3, 2026 (session 15)
 
 ## Current Version
-v0.12.8
+v0.12.9
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.8 — systemd auto-start — bootstrap node — CA initialized |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.7 — systemd auto-start (v0.12.8 deploy pending) |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.9 deploy pending restart — bootstrap node — CA initialized |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.9 deploy pending (enrolled — cert_verified/trust_approved pending daemon restart) |
+
+## What Was Just Completed (v0.12.9 — cert_verified + trust_approved in /status)
+
+### daemon/node.go — statusResponse + getOwnStatus
+- Added `cert_verified bool` and `trust_approved bool` to `statusResponse` struct
+- `getOwnStatus()` now computes both from the local filesystem on every call:
+  - `cert_verified = true` if `config/node.crt` exists (written by `ca enroll`; never exists on TOFU nodes)
+  - `trust_approved = true` if `node.crt` + `root.crt` both exist (full CA chain enrolled)
+- Filesystem check is always accurate — survives daemon restarts with no in-memory warm-up period
+- Added `"path/filepath"` to node.go imports
+
+### daemon/handlers.go — /status DRY refactor
+- `/status` handler now calls `getOwnStatus(node)` directly — was duplicating the same peer-count and IP logic inline
+- No functional change to the handler; eliminates ~20 lines of duplication
+
+### /peers — already correct
+- `/peers` already exposes `cert_verified` and `trust_approved` per peer (set async on each heartbeat via `FetchPeerCert` + `VerifyCert`); no changes needed
+
+### Deploy instructions (both nodes need restart)
+- Node1: `sudo systemctl stop vernex-daemon && sudo cp ~/vernex/daemon/vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon`
+- Node2: `cd ~/vernex && git pull && cd daemon && go build -o vernex-node . && sudo systemctl stop vernex-daemon && sudo cp vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon`
+- Verify: `curl -sk https://localhost:7701/status | jq '{version, cert_verified, trust_approved}'`
+  - Node1 expects: `"cert_verified": true, "trust_approved": true` (has node.crt + root.crt)
+  - Node2 expects: `"cert_verified": true, "trust_approved": true` (enrolled via token)
 
 ## What Was Just Completed (session 15 continued — security: token signature exposure + CA init)
 
@@ -407,9 +431,9 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. **Deploy v0.12.8 to Node-2** and run the enrollment: `curl -fsSL https://raw.githubusercontent.com/SuperSleeper/vernex-protocol/main/vernex-node-setup.sh | bash` on Node-2 (includes Section B CA enrollment)
-2. Share one enrollment token from `~/vernex/config/enrollment_tokens.txt` with Node-2 operator (paste JSON from any `config/token-<id>.json` file)
-3. Verify `cert_verified=true` appears in `/peers` on Node-1 after Node-2 re-registers post-enrollment
+1. **Restart daemon on both nodes** to pick up v0.12.9 (see deploy instructions in v0.12.9 section above)
+2. Verify `curl -sk https://localhost:7701/status | jq '{version, cert_verified, trust_approved}'` shows `true` on both nodes
+3. Burn used enrollment token `117f5e95-47dd-d1fa-3b06-cb798fe951fc` in node1's `used_tokens.json` (done automatically on next enrollment attempt; or add manually)
 4. Verify cert_verified=true appears in `/peers` after Node-2 re-registers post-enrollment
 5. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
 6. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
@@ -488,4 +512,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.12.8. Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1–v0.12.8: CertVerified race fix, mDNS heartbeat, 9-file split, IPv6 fix, mDNS auto-trust, bootstrap-setup.sh, clock verification, mDNS-first heartbeat (warning fully eliminated). Node-1: v0.12.8, CA initialized (root.crt + intermediate.crt), bootstrap node, 5 fresh enrollment tokens (config/enrollment_tokens.txt). Token signatures no longer printed to stdout — saved to config/token-<id>.json only. Node-2: v0.12.7 (deploy + enroll pending). Next: deploy v0.12.8 to Node-2, enroll via token from Node-1. Patent pending US App. 64/015,885, deadline March 24 2027.*
+*Vernex Protocol v0.12.9. Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1–v0.12.8: CertVerified race fix, mDNS heartbeat, 9-file split, IPv6 fix, mDNS auto-trust, bootstrap-setup.sh, clock verification, mDNS-first heartbeat (warning fully eliminated). Node-1: v0.12.8, CA initialized (root.crt + intermediate.crt), bootstrap node, 5 fresh enrollment tokens (config/enrollment_tokens.txt). Token signatures no longer printed to stdout — saved to config/token-<id>.json only. Node-2: v0.12.7 (deploy + enroll pending). Next: deploy v0.12.8 to Node-2, enroll via token from Node-1. Patent pending US App. 64/015,885, deadline March 24 2027.*
