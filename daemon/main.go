@@ -146,9 +146,15 @@ func runCACommand(args []string) {
 			os.Exit(1)
 		}
 		tokenJSON, _ := json.MarshalIndent(token, "", "  ")
-		fmt.Printf("\n  Enrollment Token (valid until %s):\n\n%s\n\n", token.ExpiresAt.Format("2006-01-02"), tokenJSON)
-		fmt.Println("  Share this with the new node operator.")
-		fmt.Println("  They run: vernex-node ca enroll --bootstrap <this_url> --token '<json>'")
+		tokenPath := filepath.Join(configDir, "token-"+token.TokenID+".json")
+		if err := os.WriteFile(tokenPath, tokenJSON, 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "  [!] Token save failed: %v\n", err)
+			os.Exit(1)
+		}
+		// Never print signature to stdout — confirmation only.
+		fmt.Printf("  [✓] token_id  : %s\n", token.TokenID)
+		fmt.Printf("      expires_at: %s\n", token.ExpiresAt.Format("2006-01-02"))
+		fmt.Printf("      path      : %s\n", tokenPath)
 
 	case "enroll":
 		fs := flag.NewFlagSet("ca enroll", flag.ExitOnError)

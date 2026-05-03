@@ -294,14 +294,14 @@ else
         echo
         for _i in $(seq 1 "${TOKEN_COUNT}"); do
             echo "# ── Token ${_i} ──────────────────────────────────────────────────────────────"
-            ./vernex-node ca token "${NETWORK_ID}" 2>/dev/null | python3 -c "
-import sys, json
-text = sys.stdin.read()
-start = text.find('{'); end = text.rfind('}') + 1
-if start >= 0 and end > start:
-    print(json.dumps(json.loads(text[start:end]), indent=2))
-" || warn "Token ${_i} generation failed"
-            echo
+            _CONFIRM="$(./vernex-node ca token "${NETWORK_ID}" 2>/dev/null)"
+            _TOKEN_PATH="$(echo "${_CONFIRM}" | grep 'path' | awk '{print $NF}')"
+            if [[ -n "${_TOKEN_PATH}" && -f "${_TOKEN_PATH}" ]]; then
+                cat "${_TOKEN_PATH}"
+                echo
+            else
+                warn "Token ${_i} generation failed"
+            fi
         done
     } > "${TOKEN_FILE}"
     chmod 600 "${TOKEN_FILE}"
@@ -487,9 +487,9 @@ echo
 echo -e "${BOLD}DNS TXT record (add to your DNS provider):${RESET}"
 echo -e "  ${CYAN}_vernex._tcp.<yourdomain>  TXT  \"bootstrap=${PUBLIC_IP}:${API_PORT}\"${RESET}"
 echo
-echo -e "${BOLD}Enrollment tokens:${RESET}"
+echo -e "${BOLD}Enrollment tokens (token_id + expires_at only — full JSON in ${TOKEN_FILE}):${RESET}"
 if [[ -f "${TOKEN_FILE}" ]]; then
-    cat "${TOKEN_FILE}"
+    grep -E '"token_id"|"expires_at"' "${TOKEN_FILE}" | sed 's/^/  /'
 else
     warn "Token file not found: ${TOKEN_FILE}"
 fi
