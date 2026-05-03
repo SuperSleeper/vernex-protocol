@@ -4,13 +4,38 @@
 May 3, 2026 (session 15)
 
 ## Current Version
-v0.12.9
+v0.12.10
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.9 deploy pending restart — bootstrap node — CA initialized |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.9 deploy pending (enrolled — cert_verified/trust_approved pending daemon restart) |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.10 deploy pending restart — bootstrap node — CA initialized |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.10 deploy pending (enrolled — trust-request will fire at 15s heartbeat) |
+
+## What Was Just Completed (v0.12.10 — trust-request implemented; PushedStatus preserved; manual-trust peerRegistry fix)
+
+### Bug 1 — outbound /trust-request implemented (`peer.go`)
+- `sendTrustRequestIfNeeded(node, extIP)` added; called every heartbeat tick alongside `registerWithPeers`
+- Short-circuits if `config/node.crt` exists (CA-enrolled nodes use cert-chain trust, not manual approval)
+- Short-circuits if `cfg.TrustApproved == true` (persisted after first acknowledged delivery)
+- Prefers mDNS LAN URL: derives peer node_id from `peer.PublicKey` in `cfg.PeerNodes`, looks up `dynamicPeers` — falls back to static `peerAPIURL` if not on LAN
+- Payload: `node_id`, `public_key`, `mldsa_public_key`, `api_url` — matches inbound handler at `handlers.go:382`
+- On HTTP 200: sets `node.cfg.TrustApproved = true` + calls `saveConfig()` — persisted to `node.json`
+- `config.go`: added `TrustApproved bool \`json:"trust_approved,omitempty"\`` to `NodeConfig`
+
+### Bug 2 — PushedStatus preserved on mDNS rescan (`mdns.go`)
+- All three branches (trusted-peer `mdns.go:207`, auto-trust `mdns.go:227`, manual-trust `mdns.go:268`) now call `GetByNodeID` before `Register` and carry forward `PushedStatus`, `CertVerified`, `TrustApproved`
+- The 30s blind overwrite that was clearing `PushedStatus` (and thus breaking the `public_ip → mDNSHosts` bridge) is gone
+
+### Bug 3 — manual-trust branch registers in peerRegistry (`mdns.go`)
+- Manual-trust branch now calls `peerRegistry.Register()` (preserving existing fields) before `fetchAndStorePeerStatus`
+- `fetchAndStorePeerStatus` at `mdns.go:302` was exiting early on `!ok` from `GetByNodeID` because the peer was in `dynamicPeers` but not `peerRegistry`
+- With the fix, `PushedStatus` is populated and `public_ip` enters `mDNSHosts` on the next heartbeat tick
+
+### Expected observable behavior after deploy
+- Node2 logs `[✓] trust request: delivered to bootstrap-0 via https://172.17.0.132:7701` at ~15s
+- Node1 dashboard shows Approve/Deny for VRX-a5474b585793501c
+- No more `[!] heartbeat: could not reach` for the public IP after the first mDNS cycle
 
 ## What Was Just Completed (v0.12.9 — cert_verified + trust_approved in /status)
 
@@ -431,9 +456,10 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. **Restart daemon on both nodes** to pick up v0.12.9 (see deploy instructions in v0.12.9 section above)
-2. Verify `curl -sk https://localhost:7701/status | jq '{version, cert_verified, trust_approved}'` shows `true` on both nodes
-3. Burn used enrollment token `117f5e95-47dd-d1fa-3b06-cb798fe951fc` in node1's `used_tokens.json` (done automatically on next enrollment attempt; or add manually)
+1. **Deploy v0.12.10 to both nodes** — restart daemon on node1; on node2: `git pull && go build && sudo systemctl restart vernex-daemon`
+2. Watch node2 logs for `[✓] trust request: delivered to bootstrap-0 via https://172.17.0.132:7701` at ~15s
+3. Approve node2 in node1 dashboard (http://localhost:5000) — Approve/Deny button for VRX-a5474b585793501c
+4. Verify `curl -sk https://localhost:7701/status | jq '{version, cert_verified, trust_approved}'` on both nodes
 4. Verify cert_verified=true appears in `/peers` after Node-2 re-registers post-enrollment
 5. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
 6. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
@@ -512,4 +538,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.12.9. Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1–v0.12.8: CertVerified race fix, mDNS heartbeat, 9-file split, IPv6 fix, mDNS auto-trust, bootstrap-setup.sh, clock verification, mDNS-first heartbeat (warning fully eliminated). Node-1: v0.12.8, CA initialized (root.crt + intermediate.crt), bootstrap node, 5 fresh enrollment tokens (config/enrollment_tokens.txt). Token signatures no longer printed to stdout — saved to config/token-<id>.json only. Node-2: v0.12.7 (deploy + enroll pending). Next: deploy v0.12.8 to Node-2, enroll via token from Node-1. Patent pending US App. 64/015,885, deadline March 24 2027.*
+*Vernex Protocol v0.12.10. Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1–v0.12.8: CertVerified race fix, mDNS heartbeat, 9-file split, IPv6 fix, mDNS auto-trust, bootstrap-setup.sh, clock verification, mDNS-first heartbeat (warning fully eliminated). Node-1: v0.12.8, CA initialized (root.crt + intermediate.crt), bootstrap node, 5 fresh enrollment tokens (config/enrollment_tokens.txt). Token signatures no longer printed to stdout — saved to config/token-<id>.json only. Node-2: v0.12.7 (deploy + enroll pending). Next: deploy v0.12.8 to Node-2, enroll via token from Node-1. Patent pending US App. 64/015,885, deadline March 24 2027.*
