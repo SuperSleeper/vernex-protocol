@@ -28,6 +28,7 @@ type NodeConfig struct {
 	BraveAPIKey          string     `json:"brave_api_key,omitempty"`  // Brave Search API key; omitted from config if empty
 	PeerNodes            []PeerNode `json:"peer_nodes,omitempty"`
 	IsBootstrap          bool       `json:"is_bootstrap,omitempty"`   // true on bootstrap/root CA nodes
+	TrustApproved        bool       `json:"trust_approved,omitempty"` // true once a bootstrap acknowledged /trust-request; stops retry
 	CAMode               string     `json:"ca_mode,omitempty"`        // "single" or "threshold" — default "single"
 	CAThresholdK         int        `json:"ca_threshold_k,omitempty"` // Shamir shares required (default 3)
 	CAThresholdN         int        `json:"ca_threshold_n,omitempty"` // Shamir total shares (default 5)

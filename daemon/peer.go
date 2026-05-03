@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -265,6 +267,83 @@ func registerWithPeers(node *Node, extIP string, extPort int) {
 	}
 }
 
+// sendTrustRequestIfNeeded posts /trust-request to each configured peer once per
+// heartbeat tick until cfg.TrustApproved is persisted. Short-circuits if this node
+// is CA-enrolled (node.crt exists) since cert-chain trust supersedes manual approval.
+// Uses the mDNS LAN URL when the peer has been discovered locally.
+func sendTrustRequestIfNeeded(node *Node, extIP string) {
+	if _, err := os.Stat(filepath.Join(node.configDir, "node.crt")); err == nil {
+		return // CA-enrolled — cert-chain trust supersedes manual approval
+	}
+	node.mu.RLock()
+	approved := node.cfg.TrustApproved
+	node.mu.RUnlock()
+	if approved {
+		return
+	}
+
+	cfg := node.cfg
+	pubKeyB64 := base64.StdEncoding.EncodeToString(node.publicKey)
+	mldsaRaw, _ := node.mldsaPubKey.MarshalBinary()
+	mldsaB64 := base64.StdEncoding.EncodeToString(mldsaRaw)
+
+	node.dynamicPeersMu.RLock()
+	dynSnap := make(map[string]string, len(node.dynamicPeers))
+	for id, u := range node.dynamicPeers {
+		dynSnap[id] = u
+	}
+	node.dynamicPeersMu.RUnlock()
+
+	for _, peer := range cfg.PeerNodes {
+		apiURL, err := peerAPIURL(peer)
+		if err != nil {
+			continue
+		}
+		// Prefer mDNS LAN URL when this peer has been discovered locally.
+		targetURL := apiURL
+		if raw, err := base64.StdEncoding.DecodeString(peer.PublicKey); err == nil && len(raw) == 32 {
+			if lanURL, ok := dynSnap[nodeIDFromPublicKey(ed25519.PublicKey(raw))]; ok {
+				targetURL = lanURL
+			}
+		}
+
+		parsed, err := url.Parse(targetURL)
+		if err != nil {
+			continue
+		}
+		ownIP := outboundIP(parsed.Hostname())
+		if extIP != "" && extIP != ownIP {
+			ownIP = extIP
+		}
+		ownURL := fmt.Sprintf("https://%s:%d", ownIP, cfg.APIPort)
+
+		payload, _ := json.Marshal(map[string]any{
+			"node_id":          cfg.NodeID,
+			"public_key":       pubKeyB64,
+			"mldsa_public_key": mldsaB64,
+			"api_url":          ownURL,
+		})
+		client := node.buildPeerTLSClient(5 * time.Second)
+		resp, err := client.Post(targetURL+"/trust-request", "application/json", bytes.NewReader(payload))
+		if err != nil {
+			fmt.Printf("  [~] trust request: could not reach %s (%s): %v\n", peer.Name, targetURL, err)
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode == 200 {
+			fmt.Printf("  [✓] trust request: delivered to %s via %s\n", peer.Name, targetURL)
+			node.mu.Lock()
+			node.cfg.TrustApproved = true
+			cfgErr := saveConfig(node.cfg)
+			node.mu.Unlock()
+			if cfgErr != nil {
+				fmt.Printf("  [!] trust request: could not persist trust_approved: %v\n", cfgErr)
+			}
+			return // one successful delivery is enough
+		}
+	}
+}
+
 // startHeartbeatLoop discovers the external endpoint via STUN then registers with peers
 // every 60 seconds. Only started when peer_nodes is non-empty.
 func startHeartbeatLoop(node *Node) {
@@ -284,10 +363,12 @@ func startHeartbeatLoop(node *Node) {
 			fmt.Println("  [!] External endpoint: unknown (no bootstrap peer responded to /stun)")
 		}
 		registerWithPeers(node, extIP, extPort)
+		sendTrustRequestIfNeeded(node, extIP)
 		ticker := time.NewTicker(60 * time.Second)
 		for range ticker.C {
 			curIP, _ := node.externalIP.Load().(string)
 			registerWithPeers(node, curIP, int(node.externalPort.Load()))
+			sendTrustRequestIfNeeded(node, curIP)
 		}
 	}()
 	fmt.Printf("  [✓] Peer heartbeat goroutine started (%d peers)\n", len(node.cfg.PeerNodes))

@@ -35,7 +35,7 @@ func registerMDNSViaAvahi(cfg NodeConfig, pubKeyB64 string) (*dbus.Conn, error) 
 	txtRecords := [][]byte{
 		[]byte("node_id=" + cfg.NodeID),
 		[]byte("pub_key=" + pubKeyB64),
-		[]byte("version=0.12.9"),
+		[]byte("version=0.12.10"),
 	}
 	if err := group.Call("org.freedesktop.Avahi.EntryGroup.AddService", 0,
 		int32(-1), int32(-1), uint32(0),
@@ -204,10 +204,14 @@ func startMDNS(node *Node) {
 				node.mdnsDiscoveredMu.Unlock()
 
 				if isTrustedPeer(peer.nodeID) {
+					prev, _ := node.peerRegistry.GetByNodeID(peer.nodeID)
 					node.peerRegistry.Register(PeerEntry{
-						NodeID:   peer.nodeID,
-						APIURL:   peerAPIURL,
-						LastSeen: time.Now(),
+						NodeID:        peer.nodeID,
+						APIURL:        peerAPIURL,
+						LastSeen:      time.Now(),
+						PushedStatus:  prev.PushedStatus,  // preserve — do not wipe on rescan
+						CertVerified:  prev.CertVerified,
+						TrustApproved: prev.TrustApproved,
 					})
 					// Add to dynamic heartbeat list so registerWithPeers reaches this peer.
 					node.dynamicPeersMu.Lock()
@@ -224,11 +228,14 @@ func startMDNS(node *Node) {
 					// the local TrustStore, avoiding manual approval for enrolled nodes.
 					cert, cerr := vernexca.FetchPeerCert(peerAPIURL, node.buildPeerTLSClient(5*time.Second))
 					if cerr == nil && node.trustStore.VerifyCert(*cert) == nil {
+						prev, _ := node.peerRegistry.GetByNodeID(peer.nodeID)
 						node.peerRegistry.Register(PeerEntry{
-							NodeID:       peer.nodeID,
-							APIURL:       peerAPIURL,
-							LastSeen:     time.Now(),
-							CertVerified: true,
+							NodeID:        peer.nodeID,
+							APIURL:        peerAPIURL,
+							LastSeen:      time.Now(),
+							PushedStatus:  prev.PushedStatus, // preserve — do not wipe on rescan
+							CertVerified:  true,
+							TrustApproved: prev.TrustApproved,
 						})
 						node.dynamicPeersMu.Lock()
 						node.dynamicPeers[peer.nodeID] = peerAPIURL
@@ -268,6 +275,17 @@ func startMDNS(node *Node) {
 						node.dynamicPeersMu.Lock()
 						node.dynamicPeers[peer.nodeID] = peerAPIURL
 						node.dynamicPeersMu.Unlock()
+						// Register in peerRegistry so fetchAndStorePeerStatus can find and
+						// update PushedStatus (needed for the public_ip → mDNSHosts bridge).
+						prev, _ := node.peerRegistry.GetByNodeID(peer.nodeID)
+						node.peerRegistry.Register(PeerEntry{
+							NodeID:        peer.nodeID,
+							APIURL:        peerAPIURL,
+							LastSeen:      time.Now(),
+							PushedStatus:  prev.PushedStatus,
+							CertVerified:  prev.CertVerified,
+							TrustApproved: prev.TrustApproved,
+						})
 						if !alreadyKnown {
 							fmt.Printf("  [↑] mDNS discovered unknown peer: %s — no valid cert, queued for manual approval\n", peer.nodeID)
 							go fetchAndStorePeerStatus(node, peer.nodeID, peerAPIURL)
