@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
+
+	vernexca "vernex/daemon/ca"
 )
 
 const peerLiveTTL = 90 * time.Second
@@ -154,6 +158,9 @@ func registerWithPeers(node *Node, extIP string, extPort int) {
 	// (e.g. 76.244.40.49) while mDNS discovers the same node at its LAN IP
 	// (e.g. 172.17.0.132). PushedStatus is pre-populated by fetchAndStorePeerStatus
 	// on mDNS discovery, so this mapping is available on the first heartbeat tick.
+	// mDNSTrustApproved tracks which of those hostnames are already trust_approved —
+	// used to suppress the [~] skip log once trust is established.
+	mDNSTrustApproved := make(map[string]struct{})
 	for _, p := range node.peerRegistry.LivePeers() {
 		if _, mDNS := dynamicSnapshot[p.NodeID]; !mDNS || len(p.PushedStatus) == 0 {
 			continue
@@ -163,6 +170,14 @@ func registerWithPeers(node *Node, extIP string, extPort int) {
 		}
 		if json.Unmarshal(p.PushedStatus, &s) == nil && s.PublicIP != "" {
 			mDNSHosts[s.PublicIP] = struct{}{}
+			if p.TrustApproved {
+				mDNSTrustApproved[s.PublicIP] = struct{}{}
+			}
+		}
+		if p.TrustApproved {
+			if parsed, err := url.Parse(p.APIURL); err == nil {
+				mDNSTrustApproved[parsed.Hostname()] = struct{}{}
+			}
 		}
 	}
 
@@ -173,9 +188,12 @@ func registerWithPeers(node *Node, extIP string, extPort int) {
 			continue
 		}
 		// Peer already on the LAN via mDNS — the dynamic loop below will heartbeat it.
+		// Skip silently once trust_approved; log [~] only while trust is still pending.
 		if parsed, err := url.Parse(apiURL); err == nil {
 			if _, lanPeer := mDNSHosts[parsed.Hostname()]; lanPeer {
-				fmt.Printf("  [~] heartbeat: skipping %s — already reachable via mDNS\n", peer.Name)
+				if _, approved := mDNSTrustApproved[parsed.Hostname()]; !approved {
+					fmt.Printf("  [~] heartbeat: skipping %s — already reachable via mDNS\n", peer.Name)
+				}
 				continue
 			}
 		}
@@ -208,6 +226,18 @@ func registerWithPeers(node *Node, extIP string, extPort int) {
 
 	// Heartbeat to mDNS-discovered peers.
 	for peerNodeID, peerURL := range dynamicSnapshot {
+		// Pull CA certs via the LAN URL on each tick until root.crt is present.
+		// This is the mDNS-first path for CA bootstrapping — never touches the
+		// public IP in static peer_nodes, eliminating the startup warning.
+		if _, statErr := os.Stat(filepath.Join(node.configDir, "root.crt")); os.IsNotExist(statErr) {
+			go func(u, id string) {
+				caClient := node.buildPeerTLSClient(10 * time.Second)
+				if err := vernexca.PullCASync(u, node.configDir, caClient); err == nil {
+					fmt.Printf("  [✓] CA certs pulled from %s (%s)\n", id, u)
+				}
+			}(peerURL, peerNodeID)
+		}
+
 		parsed, err := url.Parse(peerURL)
 		if err != nil {
 			continue

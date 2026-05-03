@@ -109,6 +109,7 @@ type Node struct {
 	dynamicPeersMu   sync.RWMutex
 	trustStore       *vernexca.TrustStore
 	clockStatus      vernexca.ClockStatus
+	configDir        string
 }
 
 // outboundIP returns the local IP address used to reach peerHost.
@@ -183,14 +184,15 @@ func NewNode(cfg NodeConfig, configDir string, privKey ed25519.PrivateKey, pubKe
 		peerHoles:        make(map[string]*net.UDPAddr),
 		mdnsDiscovered:   make(map[string]bool),
 		dynamicPeers:     make(map[string]string),
-		trustStore: ts,
+		trustStore:       ts,
+		configDir:        configDir,
 		stats: NodeStats{
 			NodeID:            cfg.NodeID,
 			Hostname:          hostname,
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.12.6",
+			Version:           "0.12.7",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -257,7 +259,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.12.6 — Patent Pending       ║")
+	fmt.Println("║       v0.12.7 — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Ed25519   : %s\n", base64.StdEncoding.EncodeToString(n.publicKey))

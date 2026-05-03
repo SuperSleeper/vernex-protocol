@@ -289,25 +289,6 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Pull CA certs from peers if not yet bootstrapped locally.
-	// Runs synchronously so TrustStore is populated before the first heartbeat.
-	if _, statErr := os.Stat(filepath.Join(configDir, "root.crt")); os.IsNotExist(statErr) && len(cfg.PeerNodes) > 0 {
-		fmt.Println("  [→] No local root.crt — pulling CA certs from peers...")
-		caClient := node.buildPeerTLSClient(10 * time.Second)
-		for _, peer := range cfg.PeerNodes {
-			apiURL, err := peerAPIURL(peer)
-			if err != nil {
-				fmt.Printf("  [!] CA sync: bad peer URL %q: %v\n", peer.Name, err)
-				continue
-			}
-			if err := vernexca.PullCASync(apiURL, configDir, caClient); err != nil {
-				fmt.Printf("  [!] CA certs could not pull from %s: %v\n", peer.Name, err)
-			} else {
-				fmt.Printf("  [✓] CA certs pulled from %s\n", peer.Name)
-			}
-		}
-	}
-
 	// Start token scheduler worker
 	go node.scheduler.run(node)
 	fmt.Println("  [✓] Token scheduler running (Class 1 > Class 2, FIFO)")
