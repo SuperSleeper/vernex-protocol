@@ -136,6 +136,10 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 step "5 — Install binary to ${BINARY_DEST}"
 # ─────────────────────────────────────────────────────────────────────────────
+if sudo systemctl is-active --quiet vernex-daemon 2>/dev/null; then
+    warn "Stopping vernex-daemon before binary replacement..."
+    sudo systemctl stop vernex-daemon
+fi
 sudo cp "${INSTALL_DIR}/daemon/vernex-node" "${BINARY_DEST}"
 sudo chmod 755 "${BINARY_DEST}"
 ok "Binary installed: ${BINARY_DEST}"
