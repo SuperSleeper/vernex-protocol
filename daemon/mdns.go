@@ -35,7 +35,7 @@ func registerMDNSViaAvahi(cfg NodeConfig, pubKeyB64 string) (*dbus.Conn, error) 
 	txtRecords := [][]byte{
 		[]byte("node_id=" + cfg.NodeID),
 		[]byte("pub_key=" + pubKeyB64),
-		[]byte("version=0.12.7"),
+		[]byte("version=0.12.8"),
 	}
 	if err := group.Call("org.freedesktop.Avahi.EntryGroup.AddService", 0,
 		int32(-1), int32(-1), uint32(0),
@@ -261,8 +261,16 @@ func startMDNS(node *Node) {
 							node.trustRequests = append(node.trustRequests, tr)
 						}
 						node.trustMu.Unlock()
+						// Add to dynamicPeers for outbound routing even while trust is pending.
+						// This ensures the heartbeat mDNS-first skip fires (using the LAN URL),
+						// preventing the static peer_nodes public IP from being contacted.
+						// Inbound trust (signature verification, request acceptance) remains gated.
+						node.dynamicPeersMu.Lock()
+						node.dynamicPeers[peer.nodeID] = peerAPIURL
+						node.dynamicPeersMu.Unlock()
 						if !alreadyKnown {
 							fmt.Printf("  [↑] mDNS discovered unknown peer: %s — no valid cert, queued for manual approval\n", peer.nodeID)
+							go fetchAndStorePeerStatus(node, peer.nodeID, peerAPIURL)
 						}
 					}
 				}
