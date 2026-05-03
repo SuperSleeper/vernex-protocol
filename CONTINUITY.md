@@ -1,7 +1,7 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-May 2, 2026 (session 15)
+May 3, 2026 (session 15)
 
 ## Current Version
 v0.12.8
@@ -9,8 +9,24 @@ v0.12.8
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.8 — systemd auto-start — bootstrap node |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.8 — systemd auto-start — bootstrap node — CA initialized |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.7 — systemd auto-start (v0.12.8 deploy pending) |
+
+## What Was Just Completed (session 15 continued — security: token signature exposure + CA init)
+
+### Bootstrap node CA initialized ✅
+- `vernex-bootstrap-setup.sh` ran to completion on Node-1 (2026-05-03)
+- `config/root.crt` exists and valid
+- `config/intermediate.crt` exists and valid
+- `vernex-dashboard` service active; `http://127.0.0.1:5000` → HTTP 200
+
+### Token signature exposure — revoked + fixed ✅
+- **Incident**: 5 enrollment tokens (including ML-DSA signatures) were printed to stdout by `vernex-node ca token` and appeared in a chat log
+- **Revoked**: `config/enrollment_tokens.txt` deleted; 5 old token files removed
+- **Fix in `daemon/main.go`**: `ca token` now writes full JSON to `config/token-<token_id>.json` (mode 0600); stdout shows only `token_id`, `expires_at`, and `path` — signature never reaches terminal or logs
+- **Fix in `vernex-bootstrap-setup.sh`**: token generation loop reads JSON from the saved file (not stdout); end-of-script summary prints only `token_id` + `expires_at` (not full token file)
+- **5 fresh tokens generated** and saved to `config/enrollment_tokens.txt` (mode 600); individual token files in `config/token-<id>.json`
+- The old 5 token IDs are not burned in `used_tokens.json` — they were never used for enrollment, so they are safe to discard rather than burn
 
 ## What Was Just Completed (v0.12.5–v0.12.8 — mDNS-first heartbeat, eliminate "Bootstrap unreachable" warning)
 
@@ -391,9 +407,9 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. **[TOP PRIORITY] Run `bash scripts/vernex-bootstrap-setup.sh` on Node-1** to complete CA init + generate enrollment tokens
-2. Deploy v0.12.8 to Node-2: `bash scripts/vernex-node-setup.sh` on Node-2 (or: git pull + `go build -ldflags "-X vernex/daemon/ca.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o vernex-node .` + restart daemon)
-3. Enroll Node-2 using a token from Node-1: `bash scripts/vernex-node-setup.sh` (Section B) or manually with `vernex-node ca enroll`
+1. **Deploy v0.12.8 to Node-2** and run the enrollment: `curl -fsSL https://raw.githubusercontent.com/SuperSleeper/vernex-protocol/main/vernex-node-setup.sh | bash` on Node-2 (includes Section B CA enrollment)
+2. Share one enrollment token from `~/vernex/config/enrollment_tokens.txt` with Node-2 operator (paste JSON from any `config/token-<id>.json` file)
+3. Verify `cert_verified=true` appears in `/peers` on Node-1 after Node-2 re-registers post-enrollment
 4. Verify cert_verified=true appears in `/peers` after Node-2 re-registers post-enrollment
 5. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
 6. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
@@ -472,4 +488,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.12.8. Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1: CertVerified race fix, mDNS heartbeat. v0.11.2: main.go split to 9 files. v0.11.3: IPv6 mDNS fix. v0.11.4: mDNS auto-trust. v0.11.5: bootstrap-setup.sh + enrollment in node-setup.sh. v0.12.0: 4-step clock verification; GET /time with ML-DSA sig; BlockCAOps gates CA endpoints. v0.12.5–v0.12.8: mDNS-first heartbeat — "Bootstrap unreachable" daemon warning eliminated. Script-side trust request curl removed from vernex-node-setup.sh — trust is now fully daemon-owned via 60s heartbeat. Node-1 at v0.12.8; Node-2 at v0.12.7 (v0.12.8 deploy pending). Next: run vernex-bootstrap-setup.sh on Node-1 (CA init — top priority), deploy v0.12.8 to Node-2, enroll Node-2. Patent pending US App. 64/015,885, deadline March 24 2027.*
+*Vernex Protocol v0.12.8. Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1–v0.12.8: CertVerified race fix, mDNS heartbeat, 9-file split, IPv6 fix, mDNS auto-trust, bootstrap-setup.sh, clock verification, mDNS-first heartbeat (warning fully eliminated). Node-1: v0.12.8, CA initialized (root.crt + intermediate.crt), bootstrap node, 5 fresh enrollment tokens (config/enrollment_tokens.txt). Token signatures no longer printed to stdout — saved to config/token-<id>.json only. Node-2: v0.12.7 (deploy + enroll pending). Next: deploy v0.12.8 to Node-2, enroll via token from Node-1. Patent pending US App. 64/015,885, deadline March 24 2027.*
