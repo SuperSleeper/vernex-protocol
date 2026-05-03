@@ -327,43 +327,6 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Trust request to bootstrap
-# ─────────────────────────────────────────────────────────────────────────────
-if [[ -n "${BOOTSTRAP_IP}" ]]; then
-    sleep 3  # let daemon write node_id to config
-    _NODE_ID="$(python3 -c \
-        "import json; print(json.load(open('${NODE_CONFIG}')).get('node_id',''))" \
-        2>/dev/null || true)"
-    _PUB_KEY=""
-    [[ -f "${INSTALL_DIR}/config/node.pub" ]] && \
-        _PUB_KEY="$(tr -d '\n' < "${INSTALL_DIR}/config/node.pub")"
-
-    if [[ -n "${_NODE_ID}" && -n "${_PUB_KEY}" ]]; then
-        _MY_IP="$(python3 -c "
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-try:
-    s.connect(('${BOOTSTRAP_IP}', 80))
-    print(s.getsockname()[0])
-except Exception:
-    print('')
-finally:
-    s.close()
-" 2>/dev/null || true)"
-        _RESULT="$(curl -sk --connect-timeout 5 -X POST \
-            "https://${BOOTSTRAP_IP}:${BOOTSTRAP_API_PORT}/trust-request" \
-            -H "Content-Type: application/json" \
-            -d "{\"node_id\":\"${_NODE_ID}\",\"public_key\":\"${_PUB_KEY}\",\"api_url\":\"https://${_MY_IP}:${API_PORT}\"}" \
-            2>/dev/null || true)"
-        if echo "${_RESULT}" | grep -q '"status"'; then
-            ok "Trust request sent — awaiting bootstrap operator approval"
-        else
-            warn "Bootstrap unreachable for trust request — will retry via heartbeat"
-        fi
-    fi
-fi
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────────────
 _NODE_ID_FINAL="$(python3 -c \

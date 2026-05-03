@@ -43,10 +43,14 @@ on the LAN via mDNS. Fixed over four incremental versions.
 - Result: `mDNSHosts` is populated before first heartbeat → skip fires → "Bootstrap unreachable" warning fully eliminated for LAN nodes (daemon side)
 
 ### scripts/vernex-node-setup.sh — remove script-side trust request ✅ FULLY RESOLVED
-- Root cause of remaining warning: the script itself had a "Bootstrap trust registration" step (Step 8–ish) that curl-POSTed `/trust-request` directly to each bootstrap node after install
-- Fix: removed the entire section (40+ lines); trust-request is the daemon's job via the 60s heartbeat loop — the script was duplicating it incorrectly and producing a confusing warning when the bootstrap was LAN-reachable but not yet accepting the public IP
-- Updated final summary message: now informs the operator that the daemon handles it automatically within 60s
+- Root cause of remaining warning: the script itself had a "Bootstrap trust registration" step that curl-POSTed `/trust-request` directly to each bootstrap node after install
+- Fix: removed the entire section; trust-request is the daemon's job via the 60s heartbeat loop
 - `vernex-bootstrap-setup.sh` had no equivalent section — no change needed
+
+### Canonical script locations — duplicate files removed
+- Root copies (`/vernex-node-setup.sh`, `/vernex-bootstrap-setup.sh`) are canonical — these are what `curl | bash` fetches
+- `scripts/vernex-node-setup.sh` and `scripts/vernex-bootstrap-setup.sh` were diverged duplicates — deleted via `git rm`
+- Remaining in `scripts/`: `vernex-node-wipe.sh`, `test-priority.sh`, `vernex-daemon.service`, `vernex-dashboard.service`, `90-vernex-inhibit.rules` (no root counterparts)
 
 ### scripts/vernex-node-setup.sh + scripts/vernex-bootstrap-setup.sh — "Text file busy" fix
 - Step 5: added `sudo systemctl stop vernex-daemon` before `sudo cp vernex-node /usr/local/bin/vernex-node`
