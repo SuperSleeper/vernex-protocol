@@ -37,10 +37,16 @@ on the LAN via mDNS. Fixed over four incremental versions.
 - `configDir string` field added to `Node` struct and wired in `NewNode()`; peer.go uses it for `root.crt` existence check
 - Bug: `dynamicPeers` still empty for unenrolled nodes — mDNS-first skip never fired
 
-### v0.12.8 — mdns.go: add pending-trust peers to dynamicPeers (root cause fix) ✅ RESOLVED
+### v0.12.8 — mdns.go: add pending-trust peers to dynamicPeers (root cause fix)
 - Root cause: manual-trust-queue branch in `startMDNS` never added peers to `dynamicPeers`
 - Fix: in the manual-trust-queue branch, add peer to `node.dynamicPeers` for outbound routing even while trust is pending; inbound trust (signature verification, request acceptance) remains gated
-- Result: `mDNSHosts` is populated before first heartbeat → skip fires → "Bootstrap unreachable" warning fully eliminated for LAN nodes
+- Result: `mDNSHosts` is populated before first heartbeat → skip fires → "Bootstrap unreachable" warning fully eliminated for LAN nodes (daemon side)
+
+### scripts/vernex-node-setup.sh — remove script-side trust request ✅ FULLY RESOLVED
+- Root cause of remaining warning: the script itself had a "Bootstrap trust registration" step (Step 8–ish) that curl-POSTed `/trust-request` directly to each bootstrap node after install
+- Fix: removed the entire section (40+ lines); trust-request is the daemon's job via the 60s heartbeat loop — the script was duplicating it incorrectly and producing a confusing warning when the bootstrap was LAN-reachable but not yet accepting the public IP
+- Updated final summary message: now informs the operator that the daemon handles it automatically within 60s
+- `vernex-bootstrap-setup.sh` had no equivalent section — no change needed
 
 ### scripts/vernex-node-setup.sh + scripts/vernex-bootstrap-setup.sh — "Text file busy" fix
 - Step 5: added `sudo systemctl stop vernex-daemon` before `sudo cp vernex-node /usr/local/bin/vernex-node`
@@ -462,4 +468,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.12.8. Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1: CertVerified race fix, mDNS heartbeat. v0.11.2: main.go split to 9 files. v0.11.3: IPv6 mDNS fix. v0.11.4: mDNS auto-trust. v0.11.5: bootstrap-setup.sh + enrollment in node-setup.sh. v0.12.0: 4-step clock verification; GET /time with ML-DSA sig; BlockCAOps gates CA endpoints. v0.12.5–v0.12.8: mDNS-first heartbeat — "Bootstrap unreachable" warning fully eliminated; pending-trust peers added to dynamicPeers so skip chain fires correctly. Node-1 at v0.12.8; Node-2 at v0.12.7 (v0.12.8 deploy pending). Next: run vernex-bootstrap-setup.sh on Node-1 (CA init — top priority), deploy v0.12.8 to Node-2, enroll Node-2. Patent pending US App. 64/015,885, deadline March 24 2027.*
+*Vernex Protocol v0.12.8. Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1: CertVerified race fix, mDNS heartbeat. v0.11.2: main.go split to 9 files. v0.11.3: IPv6 mDNS fix. v0.11.4: mDNS auto-trust. v0.11.5: bootstrap-setup.sh + enrollment in node-setup.sh. v0.12.0: 4-step clock verification; GET /time with ML-DSA sig; BlockCAOps gates CA endpoints. v0.12.5–v0.12.8: mDNS-first heartbeat — "Bootstrap unreachable" daemon warning eliminated. Script-side trust request curl removed from vernex-node-setup.sh — trust is now fully daemon-owned via 60s heartbeat. Node-1 at v0.12.8; Node-2 at v0.12.7 (v0.12.8 deploy pending). Next: run vernex-bootstrap-setup.sh on Node-1 (CA init — top priority), deploy v0.12.8 to Node-2, enroll Node-2. Patent pending US App. 64/015,885, deadline March 24 2027.*

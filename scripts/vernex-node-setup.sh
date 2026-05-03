@@ -452,48 +452,6 @@ if [[ -f "${VERNEX_HOME}/config/node.pub" ]]; then
     PUB_KEY="$(cat "${VERNEX_HOME}/config/node.pub")"
 fi
 
-# ── Bootstrap trust registration ──────────────────────────────────────────────
-step "Bootstrap trust registration"
-
-if [[ ${#BOOTSTRAP_NODES[@]} -eq 0 ]]; then
-    info "No bootstrap nodes configured — skipping"
-elif [[ "${NODE_ID}" == "(not yet generated)" ]]; then
-    warn "Node ID not yet available — skipping trust request (re-run after daemon starts)"
-else
-    # Determine our outbound IP toward the first bootstrap host
-    _FIRST_HOST="${BOOTSTRAP_NODES[0]%%:*}"
-    MY_IP="$(python3 -c "
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-try:
-    s.connect(('${_FIRST_HOST}', 80))
-    print(s.getsockname()[0])
-except Exception:
-    print('localhost')
-finally:
-    s.close()
-" 2>/dev/null || echo 'localhost')"
-
-    PUB_KEY_CLEAN="${PUB_KEY%$'\n'}"   # strip trailing newline from node.pub
-
-    for _BOOTSTRAP in "${BOOTSTRAP_NODES[@]}"; do
-        info "Sending trust request to https://${_BOOTSTRAP}"
-        _RESULT="$(curl -sk --connect-timeout 5 -w '\n%{http_code}' \
-            -X POST "https://${_BOOTSTRAP}/trust-request" \
-            -H "Content-Type: application/json" \
-            -d "{\"node_id\": \"${NODE_ID}\", \"public_key\": \"${PUB_KEY_CLEAN}\", \"api_url\": \"https://${MY_IP}:7701\"}" \
-            2>/dev/null || echo 'curl_failed')"
-        if echo "${_RESULT}" | grep -q '"status"'; then
-            ok "Trust request sent — awaiting operator approval at https://${_BOOTSTRAP}"
-        else
-            warn "Bootstrap ${_BOOTSTRAP} unreachable — trust request not sent"
-            warn "Retry manually: curl -sk -X POST https://${_BOOTSTRAP}/trust-request \\"
-            warn "  -H 'Content-Type: application/json' \\"
-            warn "  -d '{\"node_id\":\"${NODE_ID}\",\"public_key\":\"${PUB_KEY_CLEAN}\",\"api_url\":\"https://${MY_IP}:7701\"}'"
-        fi
-    done
-fi
-
 # ── Final status ───────────────────────────────────────────────────────────────
 echo
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════╗${RESET}"
@@ -520,6 +478,7 @@ echo
 if [[ "${GPU_TYPE}" == "nvidia" ]]; then
     warn "If NVIDIA drivers were just installed, a reboot may be required before Ollama uses the GPU."
 fi
-echo -e "${CYAN}Bootstrap trust request sent — approve via the operator's dashboard (http://localhost:5000).${RESET}"
+echo -e "${CYAN}The daemon will send a trust request to bootstrap peers automatically on the first heartbeat (within 60s).${RESET}"
+echo -e "${CYAN}Approve via the operator's dashboard (http://localhost:5000) or wait for mDNS auto-trust if enrolled.${RESET}"
 echo -e "${CYAN}To add more peers manually, edit ~/vernex/config/node.json → peer_nodes[].${RESET}"
 echo
