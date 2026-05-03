@@ -322,9 +322,9 @@ func main() {
 
 	startIPWatchdog(node)
 
-	startHeartbeatLoop(node)
-
 	startMDNS(node)
+
+	startHeartbeatLoop(node)
 
 	startUDPListener(node)
 

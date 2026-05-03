@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os/exec"
@@ -33,7 +35,7 @@ func registerMDNSViaAvahi(cfg NodeConfig, pubKeyB64 string) (*dbus.Conn, error) 
 	txtRecords := [][]byte{
 		[]byte("node_id=" + cfg.NodeID),
 		[]byte("pub_key=" + pubKeyB64),
-		[]byte("version=0.12.5"),
+		[]byte("version=0.12.6"),
 	}
 	if err := group.Call("org.freedesktop.Avahi.EntryGroup.AddService", 0,
 		int32(-1), int32(-1), uint32(0),
@@ -213,6 +215,9 @@ func startMDNS(node *Node) {
 					node.dynamicPeersMu.Unlock()
 					if !alreadyKnown {
 						fmt.Printf("  [✓] mDNS discovered trusted peer: %s at %s\n", peer.nodeID, peerAPIURL)
+						// Pre-populate PushedStatus so registerWithPeers can map public_ip → LAN IP
+						// on the first heartbeat tick (before any incoming heartbeat arrives).
+						go fetchAndStorePeerStatus(node, peer.nodeID, peerAPIURL)
 					}
 				} else {
 					// CA cert check: auto-trust peers whose cert chain validates against
@@ -233,6 +238,7 @@ func startMDNS(node *Node) {
 						}
 						if !alreadyKnown {
 							fmt.Printf("  [✓] mDNS auto-trust: %s cert chain verified\n", peer.nodeID)
+							go fetchAndStorePeerStatus(node, peer.nodeID, peerAPIURL)
 						}
 					} else {
 						tr := TrustRequest{
@@ -266,4 +272,29 @@ func startMDNS(node *Node) {
 		}
 	}()
 	fmt.Println("  [✓] mDNS discovery goroutine started (avahi-browse _vernex._tcp)")
+}
+
+// fetchAndStorePeerStatus fetches /status from a newly-discovered mDNS peer and stores
+// it as PushedStatus in peerRegistry. This pre-populates public_ip so that
+// registerWithPeers can match a static peer_nodes entry (configured with public IP)
+// to the same physical node reachable via mDNS on the LAN — without waiting for an
+// incoming heartbeat from that peer to arrive first.
+func fetchAndStorePeerStatus(node *Node, nodeID, apiURL string) {
+	client := node.buildPeerTLSClient(5 * time.Second)
+	resp, err := client.Get(apiURL + "/status")
+	if err != nil || resp.StatusCode != 200 {
+		return
+	}
+	defer resp.Body.Close()
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(resp.Body); err != nil {
+		return
+	}
+	statusBytes := json.RawMessage(buf.Bytes())
+	existing, ok := node.peerRegistry.GetByNodeID(nodeID)
+	if !ok {
+		return
+	}
+	existing.PushedStatus = statusBytes
+	node.peerRegistry.Register(existing)
 }

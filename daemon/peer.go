@@ -149,6 +149,23 @@ func registerWithPeers(node *Node, extIP string, extPort int) {
 	}
 	node.dynamicPeersMu.RUnlock()
 
+	// Also include the public_ip from PushedStatus of mDNS-discovered peers.
+	// Handles the case where the static peer_nodes entry uses a node's public IP
+	// (e.g. 76.244.40.49) while mDNS discovers the same node at its LAN IP
+	// (e.g. 172.17.0.132). PushedStatus is pre-populated by fetchAndStorePeerStatus
+	// on mDNS discovery, so this mapping is available on the first heartbeat tick.
+	for _, p := range node.peerRegistry.LivePeers() {
+		if _, mDNS := dynamicSnapshot[p.NodeID]; !mDNS || len(p.PushedStatus) == 0 {
+			continue
+		}
+		var s struct {
+			PublicIP string `json:"public_ip"`
+		}
+		if json.Unmarshal(p.PushedStatus, &s) == nil && s.PublicIP != "" {
+			mDNSHosts[s.PublicIP] = struct{}{}
+		}
+	}
+
 	for _, peer := range cfg.PeerNodes {
 		apiURL, err := peerAPIURL(peer)
 		if err != nil {
@@ -225,8 +242,9 @@ func startHeartbeatLoop(node *Node) {
 		return
 	}
 	go func() {
-		// Brief delay so our own HTTP server is ready before we hit peers.
-		time.Sleep(2 * time.Second)
+		// Delay allows mDNS discovery + fetchAndStorePeerStatus to complete so
+		// the public_ip mapping is available before the first heartbeat fires.
+		time.Sleep(15 * time.Second)
 		extIP, extPort := discoverExternalEndpoint(node.cfg, node.trustStore)
 		node.externalIP.Store(extIP)
 		node.externalPort.Store(int32(extPort))
