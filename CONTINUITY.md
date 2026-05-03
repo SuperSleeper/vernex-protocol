@@ -1,16 +1,54 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-May 1, 2026 (session 14)
+May 2, 2026 (session 15)
 
 ## Current Version
-v0.12.0
+v0.12.8
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | systemd auto-start — bootstrap node |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | systemd auto-start |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.8 — systemd auto-start — bootstrap node |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.7 — systemd auto-start (v0.12.8 deploy pending) |
+
+## What Was Just Completed (v0.12.5–v0.12.8 — mDNS-first heartbeat, eliminate "Bootstrap unreachable" warning)
+
+### Problem solved
+Nodes configured with a peer's public IP (76.244.40.49) in `peer_nodes` were logging
+`[!] heartbeat: could not reach bootstrap` even when the same peer was already reachable
+on the LAN via mDNS. Fixed over four incremental versions.
+
+### v0.12.5 — daemon/peer.go: mDNS-first skip by hostname
+- `registerWithPeers()`: snapshot `dynamicPeers` before the static loop; build `mDNSHosts` set of LAN hostnames
+- Static peer loop: skip (with `[~]` log) if peer hostname already in `mDNSHosts`
+- Bug: `mDNSHosts` used LAN IP; static config used public IP — hostnames never matched
+
+### v0.12.6 — peer.go + mdns.go: bridge via public_ip in PushedStatus
+- `fetchAndStorePeerStatus(node, nodeID, apiURL)` new function in mdns.go: async GET `/status` on mDNS discovery, stores response in `PeerEntry.PushedStatus`
+- Called (non-blocking) in trusted-peer, auto-trust, and manual-trust-queue branches when `!alreadyKnown`
+- `registerWithPeers()`: extracts `public_ip` from PushedStatus of mDNS live peers → adds to `mDNSHosts`
+- `startMDNS` moved before `startHeartbeatLoop` in main.go; heartbeat initial delay 2s → 15s
+- `mDNSTrustApproved` map: silent skip (no log) once peer is trust_approved
+
+### v0.12.7 — peer.go + main.go: move PullCASync to mDNS loop; node.configDir field
+- Removed synchronous `PullCASync` block from `main()` startup (was hitting public IP before mDNS)
+- PullCASync now runs inside the mDNS dynamic-peers heartbeat loop, retrying every 60s tick until `root.crt` exists — always uses LAN URL
+- `configDir string` field added to `Node` struct and wired in `NewNode()`; peer.go uses it for `root.crt` existence check
+- Bug: `dynamicPeers` still empty for unenrolled nodes — mDNS-first skip never fired
+
+### v0.12.8 — mdns.go: add pending-trust peers to dynamicPeers (root cause fix) ✅ RESOLVED
+- Root cause: manual-trust-queue branch in `startMDNS` never added peers to `dynamicPeers`
+- Fix: in the manual-trust-queue branch, add peer to `node.dynamicPeers` for outbound routing even while trust is pending; inbound trust (signature verification, request acceptance) remains gated
+- Result: `mDNSHosts` is populated before first heartbeat → skip fires → "Bootstrap unreachable" warning fully eliminated for LAN nodes
+
+### scripts/vernex-node-setup.sh + scripts/vernex-bootstrap-setup.sh — "Text file busy" fix
+- Step 5: added `sudo systemctl stop vernex-daemon` before `sudo cp vernex-node /usr/local/bin/vernex-node`
+- Step 10 restarts the service after install (existing behavior preserved)
+
+### Version bumps across all four versions
+- `daemon/node.go` Version field + banner: 0.12.4 → 0.12.5 → 0.12.6 → 0.12.7 → 0.12.8
+- `daemon/mdns.go` TXT record: version=0.12.4 → … → version=0.12.8
 
 ## What Was Just Completed (v0.12.0 — clock verification, /time endpoint, CA ops gated)
 
@@ -343,8 +381,8 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. Deploy v0.12.0 to Node-2: git pull, `go build -ldflags "-X vernex/daemon/ca.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o vernex-node .`, restart daemon
-2. Run `bash scripts/vernex-bootstrap-setup.sh` on Node-1 to complete CA init + generate enrollment tokens
+1. **[TOP PRIORITY] Run `bash scripts/vernex-bootstrap-setup.sh` on Node-1** to complete CA init + generate enrollment tokens
+2. Deploy v0.12.8 to Node-2: `bash scripts/vernex-node-setup.sh` on Node-2 (or: git pull + `go build -ldflags "-X vernex/daemon/ca.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o vernex-node .` + restart daemon)
 3. Enroll Node-2 using a token from Node-1: `bash scripts/vernex-node-setup.sh` (Section B) or manually with `vernex-node ca enroll`
 4. Verify cert_verified=true appears in `/peers` after Node-2 re-registers post-enrollment
 5. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
@@ -424,4 +462,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.12.0. Two-node cluster (vernex-node1: 172.17.0.132, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1: CertVerified race fix, PullCASync at startup, mDNS heartbeat. v0.11.2: main.go split to 9 files. v0.11.3: IPv6 mDNS fix. v0.11.4: mDNS auto-trust. v0.11.5: bootstrap-setup.sh + enrollment in node-setup.sh. v0.12.0: ca/clockcheck.go — 4-step clock verification (build timestamp, last-known-good, NTP median RFC5905, bootstrap /time); BlockCAOps gates CA endpoints; GET /time with ML-DSA sig; 7 new tests; build with -ldflags BuildTime in prod. Next: deploy v0.12.0 on Node-2, run bootstrap-setup.sh on Node-1, enroll Node-2. Patent pending US App. 64/015,885, deadline March 24 2027.*
+*Vernex Protocol v0.12.8. Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1: CertVerified race fix, mDNS heartbeat. v0.11.2: main.go split to 9 files. v0.11.3: IPv6 mDNS fix. v0.11.4: mDNS auto-trust. v0.11.5: bootstrap-setup.sh + enrollment in node-setup.sh. v0.12.0: 4-step clock verification; GET /time with ML-DSA sig; BlockCAOps gates CA endpoints. v0.12.5–v0.12.8: mDNS-first heartbeat — "Bootstrap unreachable" warning fully eliminated; pending-trust peers added to dynamicPeers so skip chain fires correctly. Node-1 at v0.12.8; Node-2 at v0.12.7 (v0.12.8 deploy pending). Next: run vernex-bootstrap-setup.sh on Node-1 (CA init — top priority), deploy v0.12.8 to Node-2, enroll Node-2. Patent pending US App. 64/015,885, deadline March 24 2027.*
