@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,13 +50,15 @@ type TrustRequest struct {
 // (ip_address and gateway are instant local calls; public_ip comes from the cache).
 type statusResponse struct {
 	NodeStats
-	IPAddress    string `json:"ip_address"`
-	Gateway      string `json:"gateway"`
-	PublicIP     string `json:"public_ip"`
-	ExternalIP   string `json:"external_ip,omitempty"`
-	ExternalPort int    `json:"external_port,omitempty"`
-	DirectPeers  int    `json:"direct_peers"`
-	LocalPeers   int    `json:"local_peers"`
+	IPAddress     string `json:"ip_address"`
+	Gateway       string `json:"gateway"`
+	PublicIP      string `json:"public_ip"`
+	ExternalIP    string `json:"external_ip,omitempty"`
+	ExternalPort  int    `json:"external_port,omitempty"`
+	DirectPeers   int    `json:"direct_peers"`
+	LocalPeers    int    `json:"local_peers"`
+	CertVerified  bool   `json:"cert_verified"`  // true if node.crt exists (CA-enrolled, not TOFU)
+	TrustApproved bool   `json:"trust_approved"` // true if node.crt + root.crt present (full chain enrolled)
 }
 
 type SubmitRequest struct {
@@ -192,7 +195,7 @@ func NewNode(cfg NodeConfig, configDir string, privKey ed25519.PrivateKey, pubKe
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.12.8",
+			Version:           "0.12.9",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -243,15 +246,20 @@ func getOwnStatus(n *Node) statusResponse {
 			localCount++
 		}
 	}
+	_, certErr := os.Stat(filepath.Join(n.configDir, "node.crt"))
+	certVerified := certErr == nil
+	_, rootErr := os.Stat(filepath.Join(n.configDir, "root.crt"))
 	return statusResponse{
-		NodeStats:    n.getStats(),
-		IPAddress:    outboundIP("8.8.8.8"),
-		Gateway:      defaultGateway(),
-		PublicIP:     pubIP,
-		ExternalIP:   extIP,
-		ExternalPort: int(n.externalPort.Load()),
-		DirectPeers:  directCount,
-		LocalPeers:   localCount,
+		NodeStats:     n.getStats(),
+		IPAddress:     outboundIP("8.8.8.8"),
+		Gateway:       defaultGateway(),
+		PublicIP:      pubIP,
+		ExternalIP:    extIP,
+		ExternalPort:  int(n.externalPort.Load()),
+		DirectPeers:   directCount,
+		LocalPeers:    localCount,
+		CertVerified:  certVerified,
+		TrustApproved: certVerified && rootErr == nil,
 	}
 }
 
@@ -259,7 +267,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.12.8 — Patent Pending       ║")
+	fmt.Println("║       v0.12.9 — Patent Pending       ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Ed25519   : %s\n", base64.StdEncoding.EncodeToString(n.publicKey))

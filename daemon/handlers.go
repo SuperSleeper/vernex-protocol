@@ -22,28 +22,7 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 		http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Access-Control-Allow-Origin", "*")
-			pubIP, _ := node.cachedPublicIP.Load().(string)
-			extIP, _ := node.externalIP.Load().(string)
-			livePeers := node.peerRegistry.LivePeers()
-			directCount, localCount := 0, 0
-			for _, p := range livePeers {
-				switch node.connectionType(p) {
-				case "direct":
-					directCount++
-				case "local":
-					localCount++
-				}
-			}
-			json.NewEncoder(w).Encode(statusResponse{
-				NodeStats:    node.getStats(),
-				IPAddress:    outboundIP("8.8.8.8"),
-				Gateway:      defaultGateway(),
-				PublicIP:     pubIP,
-				ExternalIP:   extIP,
-				ExternalPort: int(node.externalPort.Load()),
-				DirectPeers:  directCount,
-				LocalPeers:   localCount,
-			})
+			json.NewEncoder(w).Encode(getOwnStatus(node))
 		})
 
 		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
