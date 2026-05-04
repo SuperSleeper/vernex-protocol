@@ -315,6 +315,36 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+step "13 — vernex.net /etc/hosts entry (OAuth relay DNS)"
+# ─────────────────────────────────────────────────────────────────────────────
+# On bootstrap nodes resolve vernex.net to own LAN IP so the OAuth relay is
+# reachable by the local domain name. On compute nodes resolve it to the
+# bootstrap LAN IP. Skipped if the entry already exists.
+_VERNEX_HOSTS_IP=""
+_IS_BOOTSTRAP="$(python3 -c \
+    "import json; c=json.load(open('${NODE_CONFIG}')); print('yes' if c.get('is_bootstrap') else 'no')" \
+    2>/dev/null || echo 'no')"
+if [[ "${_IS_BOOTSTRAP}" == "yes" ]]; then
+    _VERNEX_HOSTS_IP="$(python3 -c \
+        "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); \
+         s.connect(('8.8.8.8',80)); print(s.getsockname()[0]); s.close()" \
+        2>/dev/null || hostname -I | awk '{print \$1}')"
+elif [[ -n "${BOOTSTRAP_IP}" ]]; then
+    _VERNEX_HOSTS_IP="${BOOTSTRAP_IP}"
+fi
+if [[ -n "${_VERNEX_HOSTS_IP}" ]]; then
+    if grep -qE '^\s*[0-9].*\bvernex\.net\b' /etc/hosts 2>/dev/null; then
+        ok "vernex.net already present in /etc/hosts"
+    else
+        printf '%s  vernex.net\n' "${_VERNEX_HOSTS_IP}" | sudo tee -a /etc/hosts > /dev/null
+        ok "/etc/hosts: added ${_VERNEX_HOSTS_IP}  vernex.net"
+    fi
+else
+    warn "No bootstrap IP — skipping vernex.net /etc/hosts entry"
+    warn "  Add manually: echo '<bootstrap-ip>  vernex.net' | sudo tee -a /etc/hosts"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────────────
 _NODE_ID_FINAL="$(python3 -c \

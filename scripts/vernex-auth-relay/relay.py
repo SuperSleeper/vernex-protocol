@@ -1,6 +1,6 @@
 """
 Vernex OAuth Relay — single Google OAuth app registration for ALL Vernex nodes.
-Runs behind nginx (TLS terminated at port 5443); Flask binds 127.0.0.1:5000.
+Runs behind nginx (TLS terminated at port 5443); Flask binds 127.0.0.1:5003.
 
 Stateless design: the OAuth `state` parameter encodes the return URL, signed
 with HMAC so no server-side session store is required.
@@ -204,4 +204,4 @@ def health():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     _load_keys()
-    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
+    app.run(host="127.0.0.1", port=5003, debug=False, threaded=True)
