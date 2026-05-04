@@ -416,8 +416,8 @@ def ui():
     return send_from_directory(os.path.dirname(__file__), "index.html")
 
 
-@app.route("/install")
-def install_script():
+def _install_handler():
+    """Shared /install logic — used by both port 5000 and the LAN-only port 5001 server."""
     script_path = os.path.join(_REPO_ROOT, "vernex-node-setup.sh")
     if not os.path.exists(script_path):
         return (
@@ -426,7 +426,6 @@ def install_script():
         ), 404, {"Content-Type": "text/plain"}
 
     token_id = request.args.get("token", "").strip()
-    install_url = f"http://{request.host}/install"
 
     if token_id:
         token_path = os.path.join(
@@ -436,13 +435,36 @@ def install_script():
             return f"# Token '{token_id}' not found on this bootstrap node.\n", 404, {"Content-Type": "text/plain"}
         with open(token_path) as f:
             token_json = f.read().strip()
-        # Escape any single quotes in the JSON so the shell embedding is safe
+        install_url = f"http://{request.host}/install"
+        # Escape single quotes in the JSON for safe shell embedding
         token_escaped = token_json.replace("'", "'\\''")
         cmd = f"curl -fsSL '{install_url}' | bash -s -- --token '{token_escaped}'\n"
+        return cmd, 200, {"Content-Type": "text/plain"}
     else:
         return send_from_directory(_REPO_ROOT, "vernex-node-setup.sh", mimetype="text/plain")
 
-    return cmd, 200, {"Content-Type": "text/plain"}
+
+@app.route("/install")
+def install_script():
+    return _install_handler()
+
+
+# ── LAN install server (port 5001, 0.0.0.0) ─────────────────────────────────
+# Exposes only /install so bootstrap operators can share a curl one-liner
+# to LAN nodes without exposing the full dashboard externally.
+_install_app = Flask("vernex_install")
+
+
+@_install_app.route("/install")
+def install_script_lan():
+    return _install_handler()
+
+
+def _run_install_server():
+    import logging
+    log = logging.getLogger("werkzeug")
+    log.setLevel(logging.WARNING)
+    _install_app.run(host="0.0.0.0", port=5001, threaded=True)
 
 
 @app.route("/api/nodes")
@@ -531,5 +553,6 @@ def api_trust_deny():
 
 
 if __name__ == "__main__":
-    host = os.environ.get("VERNEX_DASHBOARD_HOST", "0.0.0.0")
-    app.run(host=host, port=5000, debug=False)
+    threading.Thread(target=_run_install_server, daemon=True).start()
+    print("  [✓] Install server started on 0.0.0.0:5001 (/install only)")
+    app.run(host="127.0.0.1", port=5000, debug=False)

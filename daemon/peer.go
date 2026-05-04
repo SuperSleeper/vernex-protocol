@@ -189,15 +189,28 @@ func registerWithPeers(node *Node, extIP string, extPort int) {
 			fmt.Printf("  [!] heartbeat: bad peer URL %q: %v\n", peer.BaseURL, err)
 			continue
 		}
-		// Peer already on the LAN via mDNS — the dynamic loop below will heartbeat it.
-		// Skip silently once trust_approved; log [~] only while trust is still pending.
-		if parsed, err := url.Parse(apiURL); err == nil {
-			if _, lanPeer := mDNSHosts[parsed.Hostname()]; lanPeer {
-				if _, approved := mDNSTrustApproved[parsed.Hostname()]; !approved {
+		// Prefer node_id (cryptographic identity) over hostname (transport) for the
+		// mDNS-first skip — IP changes with DHCP/NAT, node_id does not.
+		mDNSSkip := false
+		if raw, derr := base64.StdEncoding.DecodeString(peer.PublicKey); derr == nil && len(raw) == ed25519.PublicKeySize {
+			peerNodeID := nodeIDFromPublicKey(ed25519.PublicKey(raw))
+			if _, ok := dynamicSnapshot[peerNodeID]; ok {
+				mDNSSkip = true
+				if existing, found := node.peerRegistry.GetByNodeID(peerNodeID); !found || !existing.TrustApproved {
 					fmt.Printf("  [~] heartbeat: skipping %s — already reachable via mDNS\n", peer.Name)
 				}
-				continue
 			}
+		}
+		// Fallback: hostname-based match (for peers without a public key in config).
+		if !mDNSSkip {
+			if parsed, err := url.Parse(apiURL); err == nil {
+				if _, lanPeer := mDNSHosts[parsed.Hostname()]; lanPeer {
+					mDNSSkip = true
+				}
+			}
+		}
+		if mDNSSkip {
+			continue
 		}
 		host, err := url.Parse(peer.BaseURL)
 		if err != nil {

@@ -197,7 +197,7 @@ except Exception as e:
     print(f"  [!] Could not read config: {e}", file=sys.stderr)
     sys.exit(0)
 peers = cfg.get("peer_nodes", [])
-bootstrap_url = "http://${BOOTSTRAP_IP}:11434"
+bootstrap_url = "https://${BOOTSTRAP_IP}:7701"
 if not any(p.get("base_url") == bootstrap_url for p in peers):
     peers.append({"name": "bootstrap", "base_url": bootstrap_url})
     cfg["peer_nodes"] = peers
@@ -212,7 +212,7 @@ PYEOF
 else
     _PEERS="[]"
     if [[ -n "${BOOTSTRAP_IP}" ]]; then
-        _PEERS="[{\"name\":\"bootstrap\",\"base_url\":\"http://${BOOTSTRAP_IP}:11434\"}]"
+        _PEERS="[{\"name\":\"bootstrap\",\"base_url\":\"https://${BOOTSTRAP_IP}:7701\"}]"
     fi
     cat > "${NODE_CONFIG}" <<JSONEOF
 {

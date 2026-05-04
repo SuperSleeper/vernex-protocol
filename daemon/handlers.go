@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -298,13 +299,20 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 				PushedStatus: req.Status,
 			}
 			// Preserve CertVerified and TrustApproved state across re-registers.
-			// Also check cfg.PeerNodes: if this NodeID was previously trust-approved,
-			// Name is set to the NodeID by the /trust-approve handler.
+			// Key on node_id only — IP addresses change with DHCP/NAT.
+			// Check both the Name field (set by /trust-approve) and public-key derivation
+			// (handles peers with human-readable names like "bootstrap" in node.json).
 			node.mu.RLock()
 			for _, p := range node.cfg.PeerNodes {
 				if p.Name == req.NodeID {
 					entry.TrustApproved = true
 					break
+				}
+				if raw, err := base64.StdEncoding.DecodeString(p.PublicKey); err == nil && len(raw) == ed25519.PublicKeySize {
+					if nodeIDFromPublicKey(ed25519.PublicKey(raw)) == req.NodeID {
+						entry.TrustApproved = true
+						break
+					}
 				}
 			}
 			node.mu.RUnlock()

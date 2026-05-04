@@ -1,16 +1,47 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-May 2, 2026 (session 15)
+May 3, 2026 (session 15)
 
 ## Current Version
-v0.12.11
+v0.12.12
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.11 deploy pending restart — bootstrap node — CA initialized |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.11 deploy pending (enrolled — trust-request will fire at 15s heartbeat) |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.12 deploy pending restart — bootstrap node — CA initialized |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.12 deploy pending (enrolled — trust-request will fire at 15s heartbeat) |
+
+## What Was Just Completed (v0.12.12 — four bug fixes: base_url, mDNS-first by node_id, trust by node_id, install server on LAN)
+
+### Bug 1 — vernex-node-setup.sh Step 7: bootstrap base_url corrected
+- Was writing `http://<bootstrap>:11434` (Ollama URL) as the peer base_url
+- Fixed to `https://<bootstrap>:7701` (Vernex API URL) in both the Python heredoc patch path and the new-config default
+- `peerAPIURL()` already correctly extracts just the hostname and appends `:7701`, so heartbeat routing is unaffected; `buildOllamaNodes` will no longer try to use the bootstrap as an Ollama peer (correct — bootstrap nodes don't run Ollama for compute nodes)
+
+### Bug 2 — registerWithPeers: mDNS-first skip keyed on node_id (`peer.go`)
+- Previous skip used `mDNSHosts[parsed.Hostname()]` — IP string comparison that breaks when DHCP/NAT changes addresses
+- New skip derives `peerNodeID = nodeIDFromPublicKey(ed25519.PublicKey(raw))` from `peer.PublicKey`, checks `dynamicSnapshot[peerNodeID]` — cryptographic identity, not transport
+- Hostname-based match kept as fallback for peers with no public key in config
+- Log suppression: `[~]` only printed while `!existing.TrustApproved` (read from peerRegistry, keyed by node_id)
+
+### Bug 3 — /register handler: trust lookup by node_id not name (`handlers.go`)
+- Was checking only `p.Name == req.NodeID` — fails for manually-configured peers with human names like `"bootstrap"` in node.json
+- Added secondary check: `nodeIDFromPublicKey(ed25519.PublicKey(raw)) == req.NodeID` for each peer with a public key
+- Added `"crypto/ed25519"` import to handlers.go
+- Result: a compute node's /register heartbeat correctly sets TrustApproved on the bootstrap even when the bootstrap's peer_nodes entry has `"name": "bootstrap"` rather than its VRX-... node_id
+
+### Bug 4 — dashboard: LAN-accessible install server on port 5001 (`app.py`)
+- Extracted shared `_install_handler()` function used by both `@app.route("/install")` and `_install_app`
+- `_install_app = Flask("vernex_install")` — separate minimal Flask app with only `/install`
+- Started as daemon thread via `_run_install_server()` at process start, binds `0.0.0.0:5001`
+- Full dashboard now on `127.0.0.1:5000` (localhost only — was `0.0.0.0`)
+- Bootstrap operator workflow: share `http://192.168.x.x:5001/install?token=<id>` with LAN worker operators
+
+### Deploy (both nodes)
+- Node1: `sudo systemctl stop vernex-daemon && sudo cp ~/vernex/daemon/vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon && sudo systemctl restart vernex-dashboard`
+- Node2: `cd ~/vernex && git pull && cd daemon && go build -o vernex-node . && sudo systemctl stop vernex-daemon && sudo cp vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon`
+- Verify install server: `curl -s http://172.17.0.132:5001/install | head -3`
 
 ## What Was Just Completed (v0.12.11 — non-interactive enrollment; /install returns curl one-liner with token)
 
