@@ -28,6 +28,16 @@ GO_INSTALL="1.22.5"
 API_PORT=7701
 P2P_PORT=7700
 
+# ── Parse command-line flags ──────────────────────────────────────────────────
+_ENROLL_TOKEN=""
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--token" ]] && [[ $# -gt 1 ]]; then
+        _ENROLL_TOKEN="$2"
+        break
+    fi
+    shift
+done
+
 # ─────────────────────────────────────────────────────────────────────────────
 step "1 — OS check"
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,37 +233,15 @@ step "8 — Optional: CA enrollment"
 # ─────────────────────────────────────────────────────────────────────────────
 if [[ -f "${INSTALL_DIR}/config/node.crt" ]]; then
     ok "Node cert present — skipping enrollment"
+elif [[ -n "${_ENROLL_TOKEN}" ]] && [[ -n "${BOOTSTRAP_IP}" ]]; then
+    _BOOTSTRAP_API="https://${BOOTSTRAP_IP}:${BOOTSTRAP_API_PORT}"
+    "${BINARY_DEST}" ca enroll --bootstrap "${_BOOTSTRAP_API}" --token "${_ENROLL_TOKEN}" && \
+        ok "Enrolled — cert saved to ${INSTALL_DIR}/config/node.crt" || \
+        warn "Enrollment failed. Retry: vernex-node ca enroll --bootstrap ${_BOOTSTRAP_API} --token '<json>'"
 elif [[ -n "${BOOTSTRAP_IP}" ]]; then
     _BOOTSTRAP_API="https://${BOOTSTRAP_IP}:${BOOTSTRAP_API_PORT}"
-    echo
-    echo -e "${CYAN}  Paste enrollment token JSON (from the bootstrap operator), then Ctrl-D.${RESET}"
-    echo -e "${CYAN}  Press Ctrl-D immediately to skip enrollment.${RESET}"
-    echo
-    _TOKEN="$(python3 -c "
-import sys, json
-lines = []
-try:
-    for line in sys.stdin:
-        lines.append(line)
-except Exception:
-    pass
-raw = ''.join(lines).strip()
-if not raw:
-    sys.exit(0)
-try:
-    json.loads(raw)
-    print(raw)
-except Exception:
-    print('', end='')
-" 2>/dev/null || true)"
-    if [[ -n "${_TOKEN}" ]]; then
-        "${BINARY_DEST}" ca enroll --bootstrap "${_BOOTSTRAP_API}" --token "${_TOKEN}" && \
-            ok "Enrolled — cert saved to ${INSTALL_DIR}/config/node.crt" || \
-            warn "Enrollment failed. Retry: vernex-node ca enroll --bootstrap ${_BOOTSTRAP_API} --token '<json>'"
-    else
-        warn "Enrollment skipped. Run later:"
-        warn "  vernex-node ca enroll --bootstrap ${_BOOTSTRAP_API} --token '<json>'"
-    fi
+    warn "Enrollment skipped — no token provided. Run later:"
+    warn "  vernex-node ca enroll --bootstrap ${_BOOTSTRAP_API} --token '<json>'"
 else
     warn "No bootstrap — enrollment skipped (no bootstrap found)"
 fi

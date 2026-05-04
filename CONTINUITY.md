@@ -1,16 +1,42 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-May 3, 2026 (session 15)
+May 2, 2026 (session 15)
 
 ## Current Version
-v0.12.10
+v0.12.11
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.10 deploy pending restart — bootstrap node — CA initialized |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.10 deploy pending (enrolled — trust-request will fire at 15s heartbeat) |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.11 deploy pending restart — bootstrap node — CA initialized |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.11 deploy pending (enrolled — trust-request will fire at 15s heartbeat) |
+
+## What Was Just Completed (v0.12.11 — non-interactive enrollment; /install returns curl one-liner with token)
+
+### vernex-node-setup.sh — `--token` flag + non-interactive Step 8
+- Added `$@` parser at top of script (after constants, before step 1): loops `$@`, extracts `--token <value>` into `_ENROLL_TOKEN`
+- Step 8 rewritten with three branches:
+  1. `node.crt` exists → skip (already enrolled)
+  2. `_ENROLL_TOKEN` + `BOOTSTRAP_IP` set → `vernex-node ca enroll --bootstrap ... --token "$_ENROLL_TOKEN"` non-interactively
+  3. `BOOTSTRAP_IP` set but no token → print skip hint with retry command
+  4. No bootstrap → existing "no bootstrap found" warning
+- Ctrl-D stdin read (`python3` loop reading `sys.stdin`) fully removed
+- Works both ways: `bash vernex-node-setup.sh --token '...'` or `curl ... | bash -s -- --token '...'`
+
+### dashboard/app.py — `/install` route: curl one-liner with injected token
+- `GET /install` (no params) → serves raw `vernex-node-setup.sh` (existing behavior; for plain curl | bash)
+- `GET /install?token=<token-id>` → reads `~/vernex/config/token-<token-id>.json`; returns plain-text curl one-liner:
+  ```
+  curl -fsSL 'http://<host>/install' | bash -s -- --token '<json>'
+  ```
+- Single-quotes in the token JSON are escaped with `'\\''` before embedding in the one-liner
+- 404 if the token file doesn't exist (expired, wrong ID, or not yet generated)
+- Bootstrap operator workflow: share `http://node1:5000/install?token=<id>` with the worker; worker runs the returned command verbatim
+
+### Deploy (both nodes need restart for version bump; setup.sh has no binary)
+- Node1: `sudo systemctl stop vernex-daemon && sudo cp ~/vernex/daemon/vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon`
+- Node2: `cd ~/vernex && git pull && cd daemon && go build -o vernex-node . && sudo systemctl stop vernex-daemon && sudo cp vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon`
 
 ## What Was Just Completed (v0.12.10 — trust-request implemented; PushedStatus preserved; manual-trust peerRegistry fix)
 

@@ -418,13 +418,31 @@ def ui():
 
 @app.route("/install")
 def install_script():
-    script = os.path.join(_REPO_ROOT, "vernex-node-setup.sh")
-    if not os.path.exists(script):
+    script_path = os.path.join(_REPO_ROOT, "vernex-node-setup.sh")
+    if not os.path.exists(script_path):
         return (
             "# vernex-node-setup.sh not found on this bootstrap node.\n"
             "# Get it from: https://raw.githubusercontent.com/SuperSleeper/vernex-protocol/main/vernex-node-setup.sh\n"
         ), 404, {"Content-Type": "text/plain"}
-    return send_from_directory(_REPO_ROOT, "vernex-node-setup.sh", mimetype="text/plain")
+
+    token_id = request.args.get("token", "").strip()
+    install_url = f"http://{request.host}/install"
+
+    if token_id:
+        token_path = os.path.join(
+            os.path.expanduser("~"), "vernex", "config", f"token-{token_id}.json"
+        )
+        if not os.path.exists(token_path):
+            return f"# Token '{token_id}' not found on this bootstrap node.\n", 404, {"Content-Type": "text/plain"}
+        with open(token_path) as f:
+            token_json = f.read().strip()
+        # Escape any single quotes in the JSON so the shell embedding is safe
+        token_escaped = token_json.replace("'", "'\\''")
+        cmd = f"curl -fsSL '{install_url}' | bash -s -- --token '{token_escaped}'\n"
+    else:
+        return send_from_directory(_REPO_ROOT, "vernex-node-setup.sh", mimetype="text/plain")
+
+    return cmd, 200, {"Content-Type": "text/plain"}
 
 
 @app.route("/api/nodes")
