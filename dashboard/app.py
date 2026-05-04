@@ -411,9 +411,138 @@ def index():
         trust_map=trust_map,
     )
 
+_CHAT_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vernex Chat</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh;display:flex;flex-direction:column}
+header{background:#16213e;padding:12px 16px;border-bottom:1px solid #0f3460;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header h1{font-size:1.1rem;color:#e94560;font-weight:700;letter-spacing:.05em}
+.node-info{font-size:.75rem;color:#8892a4}
+a.logout{margin-left:auto;font-size:.75rem;color:#8892a4;text-decoration:none}
+main{flex:1;max-width:800px;width:100%;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+#chat-log{flex:1;min-height:160px;display:flex;flex-direction:column;gap:10px;overflow-y:auto}
+.msg{padding:10px 14px;border-radius:8px;max-width:85%;line-height:1.5;word-break:break-word}
+.msg.user{background:#0f3460;align-self:flex-end}
+.msg.assistant{background:#16213e;border:1px solid #0f3460;align-self:flex-start;white-space:pre-wrap}
+.msg.error{background:#3d0f1a;border:1px solid #e94560;align-self:flex-start}
+form{display:flex;flex-direction:column;gap:8px}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+select,textarea{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:10px;font-size:.9rem;width:100%;font-family:inherit}
+select{width:auto}
+textarea{resize:vertical;min-height:80px}
+button{background:#e94560;color:#fff;border:none;border-radius:6px;padding:10px 28px;font-size:.9rem;cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}
+.meta{font-size:.7rem;color:#8892a4}
+</style>
+</head>
+<body>
+<header>
+  <h1>VERNEX</h1>
+  <span class="node-info" id="node-info">loading…</span>
+  <a class="logout" href="/auth/logout">logout</a>
+</header>
+<main>
+  <div id="chat-log"></div>
+  <form id="chat-form">
+    <div class="controls">
+      <select id="model-select">
+        <option value="mistral">mistral</option>
+        <option value="llama3.1">llama3.1</option>
+      </select>
+      <span class="meta" id="routed-to"></span>
+    </div>
+    <textarea id="prompt" placeholder="Enter your message…" required></textarea>
+    <div><button type="submit" id="submit-btn">Send</button></div>
+  </form>
+</main>
+<script>
+(async()=>{
+  try{
+    const r=await fetch('/api/status',{credentials:'include'});
+    const d=await r.json();
+    document.getElementById('node-info').textContent=(d.node_id||'')+'  ·  v'+(d.version||'');
+  }catch(e){document.getElementById('node-info').textContent='status unavailable';}
+})();
+document.getElementById('chat-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const prompt=document.getElementById('prompt').value.trim();
+  if(!prompt)return;
+  const log=document.getElementById('chat-log');
+  const model=document.getElementById('model-select').value;
+  const btn=document.getElementById('submit-btn');
+  const userBubble=document.createElement('div');
+  userBubble.className='msg user';
+  userBubble.textContent=prompt;
+  log.appendChild(userBubble);
+  document.getElementById('prompt').value='';
+  btn.disabled=true;btn.textContent='…';
+  try{
+    const r=await fetch('/api/chat',{method:'POST',credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:prompt,model})});
+    const d=await r.json();
+    const b=document.createElement('div');
+    b.className=d.error?'msg error':'msg assistant';
+    b.textContent=d.response||d.error||JSON.stringify(d);
+    log.appendChild(b);
+    if(d.routed_to)document.getElementById('routed-to').textContent='routed → '+d.routed_to;
+  }catch(err){
+    const b=document.createElement('div');
+    b.className='msg error';
+    b.textContent='Request failed: '+err.message;
+    log.appendChild(b);
+  }finally{
+    btn.disabled=false;btn.textContent='Send';
+    log.scrollTop=log.scrollHeight;
+  }
+});
+</script>
+</body>
+</html>"""
+
+
 @app.route("/ui")
 def ui():
-    return send_from_directory(os.path.dirname(__file__), "index.html")
+    return render_template_string(_CHAT_HTML)
+
+
+@app.route("/api/status")
+def api_status():
+    try:
+        r = requests.get(f"{LOCAL_URL}/status", timeout=2, verify=False)
+        return r.content, r.status_code, {"Content-Type": "application/json"}
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    body = request.get_json(force=True) or {}
+    prompt = body.get("message", "").strip()
+    model = body.get("model", "mistral")
+    if not prompt:
+        return jsonify({"error": "message required"}), 400
+    try:
+        r = requests.post(
+            f"{LOCAL_URL}/submit",
+            json={"prompt": prompt, "class": 1, "model": model},
+            timeout=120,
+            verify=False,
+        )
+        d = r.json()
+        return jsonify({
+            "response": d.get("response", ""),
+            "node_id": d.get("node_id", ""),
+            "routed_to": d.get("routed_to", ""),
+            "model": d.get("model", model),
+        }), r.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
 
 
 def _install_handler():
@@ -553,6 +682,9 @@ def api_trust_deny():
 
 
 if __name__ == "__main__":
+    from oauth import run_oauth_server
+    threading.Thread(target=run_oauth_server, daemon=True).start()
+    print("  [✓] OAuth server started on 127.0.0.1:5002 (/auth/*, /api/me)")
     threading.Thread(target=_run_install_server, daemon=True).start()
     print("  [✓] Install server started on 0.0.0.0:5001 (/install only)")
     app.run(host="127.0.0.1", port=5000, debug=False)

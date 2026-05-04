@@ -2,6 +2,13 @@
 config/node.json
 config/node.key
 config/node.pub
+config/node.mldsa.key
+config/node.mldsa.pub
+config/oauth.json
+config/users.json
+config/token-*.json
+config/trusted_certs/
+config/last_seen_time.json
 dashboard/venv/
 daemon/vernex-node
 dashboard/__pycache__/

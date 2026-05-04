@@ -170,6 +170,75 @@ Vernex Protocol is released under the
 
 ---
 
+## Google OAuth Setup (Dashboard Login)
+
+The dashboard uses Google OAuth 2.0 for authentication. To enable it:
+
+### 1. Create a Google OAuth App
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com)
+2. Create a new project (or select an existing one)
+3. Navigate to **APIs & Services → Credentials**
+4. Click **Create Credentials → OAuth client ID**
+5. Application type: **Web application**
+6. Name: `Vernex Dashboard` (or anything)
+7. Under **Authorized redirect URIs**, add:
+   ```
+   http://172.17.0.132:5080/auth/callback
+   ```
+   Replace `172.17.0.132` with your node1's LAN IP if different.
+8. Click **Create** — copy the **Client ID** and **Client Secret**
+
+### 2. Configure the Node
+
+Edit `~/vernex/config/oauth.json` on node1 (created automatically on first dashboard start):
+
+```json
+{
+  "google_client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+  "google_client_secret": "YOUR_CLIENT_SECRET",
+  "facebook_client_id": "",
+  "facebook_client_secret": "",
+  "session_secret": "<leave as-is — auto-generated>",
+  "redirect_base": "http://172.17.0.132:5080"
+}
+```
+
+### 3. Restart the Dashboard
+
+```bash
+sudo systemctl restart vernex-dashboard
+```
+
+### 4. First Login = Admin
+
+The first Google account to log in is automatically assigned the `admin` role and can access the full dashboard. Subsequent accounts get `user` role (chat UI only). To promote a user to admin, edit `~/vernex/config/users.json`:
+
+```json
+{
+  "user@example.com": {"role": "admin", "enabled": true}
+}
+```
+
+### Roles
+
+| Role | Access |
+|------|--------|
+| `admin` | Full dashboard (`/`) + chat UI (`/ui`) |
+| `user` | Chat UI only (`/ui`) |
+
+### Install Script (No Auth)
+
+The install script endpoint (`/install`) is always public — no login required. Workers fetch it to join the network:
+
+```bash
+curl -fsSL http://172.17.0.132:5080/install | bash
+# or with enrollment token:
+curl -fsSL "http://172.17.0.132:5080/install?token=<token-id>"
+```
+
+---
+
 ## Author
 
 **Eric Geer** — Senior Network Engineer

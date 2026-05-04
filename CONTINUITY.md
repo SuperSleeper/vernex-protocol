@@ -4,13 +4,84 @@
 May 3, 2026 (session 15)
 
 ## Current Version
-v0.12.12
+v0.12.13
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.12 deploy pending restart — bootstrap node — CA initialized |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.12 deploy pending (enrolled — trust-request will fire at 15s heartbeat) |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.13 deploy pending — bootstrap node — CA initialized — nginx + OAuth deploy pending |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.13 deploy pending (enrolled) |
+
+## What Was Just Completed (v0.12.13 — nginx reverse proxy + Google OAuth + Chat UI)
+
+### Architecture: nginx on port 5080 as auth gateway
+- `scripts/nginx-vernex.conf` — new nginx site config at `/etc/nginx/sites-available/vernex`
+- Port 5080, proxying to three backends: 5000 (dashboard), 5001 (install), 5002 (oauth)
+- nginx `auth_request /_auth_admin` / `/_auth_user` (internal subrequests to oauth.py `/auth/verify?role=`)
+- Route map:
+  - `/install` → 127.0.0.1:5001 — no auth (LAN install script delivery)
+  - `/auth/*` → 127.0.0.1:5002 — no auth (OAuth flow)
+  - `= /api/me` → 127.0.0.1:5002 — no auth (returns 401 itself if not logged in)
+  - `/ui` → 127.0.0.1:5000 — user auth
+  - `/api/` → 127.0.0.1:5000 — user auth
+  - `/` → 127.0.0.1:5000 — admin auth
+- `@login_redirect` named location: `return 302 /auth/login`
+
+### dashboard/oauth.py — new file (Google OAuth 2.0 on 127.0.0.1:5002)
+- HMAC-SHA256 signed cookies: `base64url(email|role|exp) + "." + hmac`
+- `_ensure_configs()` creates `config/oauth.json` (mode 0600) and `config/users.json` (mode 0600) if missing
+- `config/oauth.json`: google_client_id, google_client_secret, facebook stubs, session_secret (auto-generated), redirect_base
+- First Google login → admin; subsequent → user; disabled users → 403
+- Role hierarchy: admin ≥ user (admin can access /ui too)
+- `run_oauth_server()` — started as daemon thread from app.py `__main__`
+- Routes: `/auth/verify?role=`, `/auth/login`, `/auth/callback`, `/auth/logout`, `/api/me`
+
+### dashboard/app.py changes
+- `/ui` route replaced: now returns `_CHAT_HTML` (inline chat template)
+- `/api/status` new route — proxies GET to daemon `/status`
+- `/api/chat` new route — POST `{message, model}` → daemon `/submit` class 1 → returns `{response, node_id, routed_to, model}`
+- oauth server started as daemon thread in `__main__` before main `app.run()`
+
+### Chat UI (_CHAT_HTML inline template)
+- Dark theme (1a1a2e background, e94560 accent)
+- Header: VERNEX + node_id + version (fetched from /api/status) + logout link
+- Model selector: mistral / llama3.1
+- Scrollable chat log with user/assistant/error message bubbles
+- Mobile-responsive (flexbox, viewport meta)
+- Submits to `/api/chat`, displays routed_to in footer
+
+### .gitignore additions
+- `config/oauth.json`, `config/users.json`, `config/token-*.json`
+- `config/trusted_certs/`, `config/last_seen_time.json`
+- `config/node.mldsa.key`, `config/node.mldsa.pub`
+
+### README.md — Google OAuth setup section
+- console.cloud.google.com steps, redirect URI to set
+- Where to paste client_id/secret in oauth.json
+- Role table (admin vs user)
+- First-login gets admin explanation
+
+### Deploy (node1 only)
+```bash
+# Install nginx
+sudo apt-get install -y nginx
+
+# Install nginx site
+sudo cp ~/vernex/scripts/nginx-vernex.conf /etc/nginx/sites-available/vernex
+sudo ln -sf /etc/nginx/sites-available/vernex /etc/nginx/sites-enabled/vernex
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl enable --now nginx
+
+# Restart dashboard (starts oauth + install servers as threads)
+sudo systemctl restart vernex-dashboard
+
+# Verify
+curl -s http://127.0.0.1:5002/api/me            # → 401 (expected)
+curl -s http://172.17.0.132:5080/install | head -3  # → script header
+curl -s http://172.17.0.132:5080/auth/login         # → redirect to Google
+```
+- After deploy: fill in `~/vernex/config/oauth.json` with google_client_id and google_client_secret
+- Redirect URI to register in Google Cloud Console: `http://172.17.0.132:5080/auth/callback`
 
 ## What Was Just Completed (v0.12.12 — four bug fixes: base_url, mDNS-first by node_id, trust by node_id, install server on LAN)
 
