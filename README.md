@@ -200,7 +200,7 @@ Edit `~/vernex/config/oauth.json` on node1 (created automatically on first dashb
   "facebook_client_id": "",
   "facebook_client_secret": "",
   "session_secret": "<leave as-is — auto-generated>",
-  "redirect_base": "http://172.17.0.132:5080"
+  "redirect_base": "http://127.0.0.1:5080"
 }
 ```
 
