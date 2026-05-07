@@ -83,6 +83,14 @@ func (pr *PeerRegistry) SetTrustApproved(nodeID string, approved bool) bool {
 	return true
 }
 
+// Remove immediately evicts a peer from the registry so it appears OFFLINE
+// without waiting for the heartbeat TTL to expire.
+func (pr *PeerRegistry) Remove(nodeID string) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	delete(pr.entries, nodeID)
+}
+
 // LivePeers returns all entries whose last heartbeat was within peerLiveTTL.
 func (pr *PeerRegistry) LivePeers() []PeerEntry {
 	pr.mu.RLock()
@@ -277,6 +285,60 @@ func registerWithPeers(node *Node, extIP string, extPort int) {
 		}
 		resp.Body.Close()
 		fmt.Printf("  [✓] heartbeat: registered with mDNS peer %s (%s)\n", peerNodeID, peerURL)
+	}
+}
+
+// sendDeregisterToBootstrap notifies all known peers that this node is going offline
+// gracefully. Called during SIGTERM/SIGINT shutdown so peers mark us OFFLINE immediately
+// rather than waiting up to peerLiveTTL (90 s) for the heartbeat to expire.
+// Failures are logged but not fatal — the next missed heartbeat will expire us anyway.
+func sendDeregisterToBootstrap(node *Node) {
+	cfg := node.cfg
+
+	node.dynamicPeersMu.RLock()
+	dynSnap := make(map[string]string, len(node.dynamicPeers))
+	for id, u := range node.dynamicPeers {
+		dynSnap[id] = u
+	}
+	node.dynamicPeersMu.RUnlock()
+
+	// Deduplicated target set: prefer mDNS LAN URL for static peers when available,
+	// then add any dynamic peers not already covered.
+	targets := make(map[string]string) // target URL → display name
+	for _, peer := range cfg.PeerNodes {
+		apiURL, err := peerAPIURL(peer)
+		if err != nil {
+			continue
+		}
+		targetURL := apiURL
+		if raw, err := base64.StdEncoding.DecodeString(peer.PublicKey); err == nil && len(raw) == ed25519.PublicKeySize {
+			if lanURL, ok := dynSnap[nodeIDFromPublicKey(ed25519.PublicKey(raw))]; ok {
+				targetURL = lanURL
+			}
+		}
+		targets[targetURL] = peer.Name
+	}
+	for peerNodeID, peerURL := range dynSnap {
+		if _, exists := targets[peerURL]; !exists {
+			targets[peerURL] = peerNodeID
+		}
+	}
+
+	if len(targets) == 0 {
+		return
+	}
+
+	payload, _ := json.Marshal(map[string]string{"node_id": cfg.NodeID})
+	client := node.buildPeerTLSClient(3 * time.Second)
+
+	for targetURL, name := range targets {
+		resp, err := client.Post(targetURL+"/deregister", "application/json", bytes.NewReader(payload))
+		if err != nil {
+			fmt.Printf("  [!] deregister: could not reach %s: %v\n", name, err)
+			continue
+		}
+		resp.Body.Close()
+		fmt.Printf("  [✓] deregister: notified %s (%s)\n", name, targetURL)
 	}
 }
 

@@ -345,6 +345,31 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "node_id": node.cfg.NodeID})
 		})
 
+		// /deregister — peer notifies this node it is going offline gracefully.
+		// Immediately removes the peer from the live registry so it appears OFFLINE
+		// without waiting for the 90 s heartbeat TTL to expire.
+		http.HandleFunc("/deregister", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "POST required", http.StatusMethodNotAllowed)
+				return
+			}
+			var req struct {
+				NodeID string `json:"node_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			if req.NodeID == "" {
+				http.Error(w, "node_id required", http.StatusBadRequest)
+				return
+			}
+			node.peerRegistry.Remove(req.NodeID)
+			fmt.Printf("  [↓] deregister: peer offline  id=%s\n", req.NodeID)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "node_id": req.NodeID})
+		})
+
 		// /peers — returns all peers that have sent a heartbeat within the last 90 seconds.
 		http.HandleFunc("/peers", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")

@@ -4,13 +4,35 @@
 May 6, 2026 (session 18)
 
 ## Current Version
-v0.12.16
+v0.12.17
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.16 running ✓; OAuth ✓; /ui chat ✓; dashboard 2/2 online ✓ |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.16 deploy pending; oauth.json needs relay format + redirect_base |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.17 built; deploy pending |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.17 deploy pending; oauth.json needs relay format + redirect_base |
+
+## What Was Just Completed (v0.12.17 — graceful shutdown deregister)
+
+### daemon: /deregister endpoint (handlers.go)
+- `POST /deregister {node_id}` — peer calls this on clean shutdown
+- Calls `peerRegistry.Remove(nodeID)` to evict immediately from live-peers list
+- Peer appears OFFLINE at once rather than waiting up to 90 s for heartbeat TTL
+- No auth required (consistent with `/register`; worst case: spurious deregister is self-healing on next heartbeat)
+- Logged as `[↓] deregister: peer offline id=<id>`
+
+### daemon: PeerRegistry.Remove() (peer.go)
+- New method: `Remove(nodeID string)` — locked delete from the entries map
+
+### daemon: sendDeregisterToBootstrap() (peer.go)
+- Called by SIGTERM/SIGINT handler in main.go before os.Exit
+- Iterates static peer_nodes + dynamic mDNS peers (deduplicated by URL, mDNS preferred over static)
+- POSTs `{node_id}` to each peer's `/deregister` with a 3 s timeout
+- Failures logged but non-fatal — next missed heartbeat expires the entry anyway
+
+### daemon: SIGTERM handler (main.go)
+- Now calls `sendDeregisterToBootstrap(node)` before releasing inhibitor lock and exiting
+- `systemctl stop vernex-daemon` → node notifies all peers → exits cleanly
 
 ## What Was Just Completed (v0.12.16 — three setup/oauth fixes)
 
@@ -685,7 +707,7 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. **Deploy v0.12.16 on node2**
+1. **Deploy v0.12.17 on both nodes**
    ```bash
    ssh ericgeer@172.17.0.182 "cd ~/vernex && git config pull.rebase false && git pull && cd daemon && go build -o vernex-node . && sudo systemctl stop vernex-daemon && sudo cp vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon"
    ```

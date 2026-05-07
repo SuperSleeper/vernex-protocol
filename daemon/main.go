@@ -289,6 +289,7 @@ func main() {
 	go func() {
 		sig := <-sigs
 		fmt.Printf("\n  [→] Received %s — shutting down...\n", sig)
+		sendDeregisterToBootstrap(node)
 		if inhibitor != nil {
 			inhibitor.Close()
 		}
