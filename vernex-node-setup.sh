@@ -107,6 +107,7 @@ step "3 — Clone / update repository (HTTPS)"
 # ─────────────────────────────────────────────────────────────────────────────
 mkdir -p "${INSTALL_DIR}"
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
+    git -C "${INSTALL_DIR}" config pull.rebase false
     git -C "${INSTALL_DIR}" pull origin main && ok "Repo updated"
 else
     git clone "${REPO_URL}" "${INSTALL_DIR}" && ok "Repo cloned"
@@ -370,7 +371,8 @@ _st="$(systemctl is-active vernex-daemon 2>/dev/null || echo inactive)"
 echo
 echo -e "${CYAN}Logs:   sudo journalctl -u vernex-daemon -f${RESET}"
 echo -e "${CYAN}Status: curl -sk https://localhost:${API_PORT}/status | jq .${RESET}"
-if ! ollama list 2>/dev/null | grep -q '.'; then
+_MODEL_COUNT="$(ollama list 2>/dev/null | grep -v "^NAME" | grep -c . || echo 0)"
+if [[ "${_MODEL_COUNT}" -eq 0 ]]; then
     echo
     warn "No Ollama models found. Pull one to enable inference:"
     warn "  ollama pull mistral:7b-instruct-q4_K_M"

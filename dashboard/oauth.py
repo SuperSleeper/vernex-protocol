@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import secrets
+import socket
 import ssl
 import time
 import urllib.parse
@@ -48,13 +49,62 @@ _SESSION_DAYS = 7
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
+def _detect_lan_ip() -> str:
+    """Return the node's LAN IP, preferring the daemon's reported value."""
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(
+            "https://localhost:7701/status", context=ctx, timeout=2
+        ) as r:
+            data = json.loads(r.read())
+        ip = data.get("ip_address", "")
+        if ip and ip != "127.0.0.1":
+            return ip
+    except Exception:
+        pass
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and ip != "127.0.0.1":
+            return ip
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
+def _resolve_redirect_base() -> str:
+    """Return redirect_base from oauth.json; auto-detect and persist if missing."""
+    try:
+        rb = _load_cfg().get("redirect_base", "")
+        if rb:
+            return rb
+    except Exception:
+        pass
+    ip = _detect_lan_ip()
+    rb = f"http://{ip}:5080"
+    try:
+        cfg = _load_cfg()
+        cfg["redirect_base"] = rb
+        with open(_OAUTH_PATH, "w") as f:
+            json.dump(cfg, f, indent=2)
+            f.write("\n")
+        os.chmod(_OAUTH_PATH, 0o600)
+        logging.info("[oauth] auto-detected redirect_base=%s", rb)
+    except Exception:
+        pass
+    return rb
+
+
 def _ensure_configs():
     os.makedirs(_CONFIG_DIR, exist_ok=True)
     if not os.path.exists(_OAUTH_PATH):
         default = {
             "session_secret": secrets.token_hex(32),
             "relay_url": "https://vernex.net:5443",
-            "redirect_base": "http://172.17.0.132:5080",
         }
         with open(_OAUTH_PATH, "w") as f:
             json.dump(default, f, indent=2)
@@ -197,9 +247,9 @@ def auth_verify():
 def auth_login():
     cfg = _load_cfg()
     relay_url = cfg.get("relay_url", "")
-    redirect_base = cfg.get("redirect_base", "")
     if not relay_url:
         return "<h2>oauth.json missing relay_url</h2>", 503
+    redirect_base = cfg.get("redirect_base", "") or _resolve_redirect_base()
     return_url = urllib.parse.quote(f"{redirect_base}/auth/complete", safe="")
     return redirect(f"{relay_url}/login?return={return_url}")
 

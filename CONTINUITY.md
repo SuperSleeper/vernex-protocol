@@ -1,16 +1,37 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-May 4, 2026 (session 16)
+May 6, 2026 (session 17)
 
 ## Current Version
-v0.12.14
+v0.12.16
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.12 running (binary rebuild + deploy pending); relay ✓ at vernex.net:5443 |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.14 deploy pending (enrolled) |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.16 built; deploy pending |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.16 deploy pending (enrolled) |
+
+## What Was Just Completed (v0.12.16 — three setup/oauth fixes)
+
+### vernex-node-setup.sh — Step 3: prevent divergent-branch error on git pull
+- Added `git -C "${INSTALL_DIR}" config pull.rebase false` before `git pull origin main`
+- Prevents `fatal: Need to specify how to reconcile divergent branches` on re-runs
+
+### vernex-node-setup.sh — Ollama model check: reliable detection
+- Replaced `ollama list | grep -q '.'` (breaks when only header line is present)
+- Now: `_MODEL_COUNT="$(ollama list 2>/dev/null | grep -v "^NAME" | grep -c . || echo 0)"`
+- Only warns when count is 0 (no actual models, ignoring the NAME header line)
+
+### dashboard/oauth.py — redirect_base auto-detection
+- `_ensure_configs()` no longer writes a hardcoded `redirect_base` into new oauth.json
+- New `_detect_lan_ip()`: tries daemon `/status` API (`https://localhost:7701/status`) first;
+  falls back to UDP socket trick (`connect("8.8.8.8",80)` → `getsockname()`); final fallback `127.0.0.1`
+- New `_resolve_redirect_base()`: reads oauth.json; if `redirect_base` is missing/empty,
+  detects LAN IP, builds `http://<ip>:5080`, writes it back to oauth.json, returns it
+- `auth_login()` uses `cfg.get("redirect_base","") or _resolve_redirect_base()` — existing
+  explicit values are always honoured; detection only runs when field is absent or empty
+- Added `import socket` to imports
 
 ## What Was Just Completed (v0.12.14 — central OAuth relay at vernex.net)
 
@@ -664,10 +685,10 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. **Deploy v0.12.14 daemon on node1** — `sudo systemctl stop vernex-daemon && sudo cp ~/vernex/daemon/vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon`
-2. **Deploy v0.12.14 daemon on node2** — `ssh ericgeer@172.17.0.182 "cd ~/vernex && git pull && cd daemon && go build -o vernex-node . && sudo systemctl stop vernex-daemon && sudo cp vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon"`
-3. **Test OAuth flow end-to-end** — open http://172.17.0.132:5080/auth/login → should redirect to relay → Google → back to node
-4. **Add redirect_base for node2 oauth.json** after deploying: `{"session_secret":"<generate>","relay_url":"https://vernex.net:5443","redirect_base":"http://172.17.0.182:5080"}`
+1. **Deploy v0.12.16 daemon on node1** — `sudo systemctl stop vernex-daemon && sudo cp ~/vernex/daemon/vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon`
+2. **Deploy v0.12.16 daemon on node2** — `ssh ericgeer@172.17.0.182 "cd ~/vernex && git config pull.rebase false && git pull && cd daemon && go build -o vernex-node . && sudo systemctl stop vernex-daemon && sudo cp vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon"`
+3. **Test OAuth flow end-to-end** — open http://172.17.0.132:5080/auth/login → should redirect to relay → Google → back; redirect_base auto-detected from daemon /status
+4. **Verify redirect_base written to oauth.json on first login** — `cat ~/vernex/config/oauth.json | jq .redirect_base`
 5. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
 6. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
 7. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
