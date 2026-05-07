@@ -1,7 +1,7 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-May 6, 2026 (session 17)
+May 6, 2026 (session 18)
 
 ## Current Version
 v0.12.16
@@ -9,8 +9,8 @@ v0.12.16
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.16 built; deploy pending |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.16 deploy pending (enrolled) |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.16 running ✓; OAuth ✓; /ui chat ✓; dashboard 2/2 online ✓ |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.16 deploy pending; oauth.json needs relay format + redirect_base |
 
 ## What Was Just Completed (v0.12.16 — three setup/oauth fixes)
 
@@ -685,14 +685,19 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - Trust request approval — operator must approve new node public keys via dashboard
 
 ## Immediate Next Steps (in priority order)
-1. **Deploy v0.12.16 daemon on node1** — `sudo systemctl stop vernex-daemon && sudo cp ~/vernex/daemon/vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon`
-2. **Deploy v0.12.16 daemon on node2** — `ssh ericgeer@172.17.0.182 "cd ~/vernex && git config pull.rebase false && git pull && cd daemon && go build -o vernex-node . && sudo systemctl stop vernex-daemon && sudo cp vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon"`
-3. **Test OAuth flow end-to-end** — open http://172.17.0.132:5080/auth/login → should redirect to relay → Google → back; redirect_base auto-detected from daemon /status
-4. **Verify redirect_base written to oauth.json on first login** — `cat ~/vernex/config/oauth.json | jq .redirect_base`
-5. Upgrade buildTLSConfig to issue CA-signed ML-DSA TLS certs → enables full VerifyTLSPeerCert enforcement
-6. Migrate VernexCert format from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support
-7. WireGuard remote node connectivity — OPNsense firewall rules for external nodes
-8. Rename "Social" → "Compute Donation" in dashboard and daemon
+1. **Deploy v0.12.16 on node2**
+   ```bash
+   ssh ericgeer@172.17.0.182 "cd ~/vernex && git config pull.rebase false && git pull && cd daemon && go build -o vernex-node . && sudo systemctl stop vernex-daemon && sudo cp vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon"
+   ```
+2. **node2 oauth.json** — ensure relay format (no google_ keys); redirect_base will auto-detect from daemon /status on first `/auth/login` hit:
+   ```json
+   { "session_secret": "<generate>", "relay_url": "https://vernex.net:5443" }
+   ```
+3. **Fix Unbound DNS for vernex.net on LAN devices** — LAN clients need `vernex.net` to resolve to the bootstrap/relay LAN IP so OAuth redirect completes without hitting the public internet hop; add a local override in OPNsense Unbound (or `/etc/hosts` on each node).
+4. **Port 7701 external test via hotspot** — connect a device to mobile hotspot, hit `https://76.244.40.49:7701/status`; confirms daemon reachable from outside LAN for future remote-node support.
+5. **NOTICE file — BSL 1.1 compliance** — create `NOTICE` at repo root with: project name, copyright line, patent pending notice (U.S. App. No. 64/015,885), and BSL change date / change license fields.
+6. **Non-provisional patent prep** — deadline March 24, 2027; begin drafting formal claims around the two-class token system, Commons Review consent gate, and zero-touch enrollment. Consider engaging a patent attorney by Q3 2026.
+7. **ML-DSA + ML-KEM upgrade** — upgrade `buildTLSConfig` to issue CA-signed ML-DSA TLS certs (enables full `VerifyTLSPeerCert` enforcement); migrate `VernexCert` from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support; add ML-KEM for key encapsulation on inter-node channels.
 
 ## Design Constraints (never violate)
 - All cryptography must become post-quantum resistant (ML-DSA + ML-KEM, NIST FIPS 203/204)
@@ -704,8 +709,9 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 ## Patent Status
 - U.S. Provisional Application No. 64/015,885
 - Filed: March 24, 2026
-- Non-provisional deadline: March 24, 2027
+- **Non-provisional deadline: March 24, 2027** ← ~10 months away; begin formal claim drafting by Q3 2026
 - Six new patent extension claims drafted (hierarchical DHT, distributed CA, post-quantum identity, zero-touch provisioning, threshold signing, distributed contribution ledger)
+- NOTICE file (BSL 1.1 compliance) — outstanding, see next steps
 
 ## Key Ports
 | Port | Service | Notes |
