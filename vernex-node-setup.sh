@@ -132,6 +132,18 @@ step "5 — Install binary to ${BINARY_DEST}"
 if sudo systemctl is-active --quiet vernex-daemon 2>/dev/null; then
     warn "Stopping vernex-daemon before binary replacement..."
     sudo systemctl stop vernex-daemon
+    # Wait until the unit is fully stopped before touching the binary.
+    # systemctl stop returns once the stop job is dispatched, not when
+    # the process has exited — copying a running ELF causes "Text file busy".
+    _STOPPED=false
+    for _i in 1 2 3 4 5 6 7 8 9 10; do
+        if ! sudo systemctl is-active --quiet vernex-daemon 2>/dev/null; then
+            _STOPPED=true; break
+        fi
+        sleep 1
+    done
+    ${_STOPPED} || die "vernex-daemon did not stop within 10 s — cannot replace binary"
+    ok "vernex-daemon stopped"
 fi
 sudo cp "${INSTALL_DIR}/daemon/vernex-node" "${BINARY_DEST}"
 sudo chmod 755 "${BINARY_DEST}"
