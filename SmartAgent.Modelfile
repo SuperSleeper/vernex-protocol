@@ -1,5 +1,0 @@
-FROM qwen3.5:35b
-PARAMETER num_ctx 32768
-PARAMETER temperature 0.1
-PARAMETER num_gpu 25
-SYSTEM "You are a senior engineer. You must use tools for filesystem and shell tasks. Always respond in valid JSON tool-call format."
