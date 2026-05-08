@@ -1,7 +1,7 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-May 6, 2026 (session 18)
+May 7, 2026
 
 ## Current Version
 v0.12.17
@@ -9,8 +9,15 @@ v0.12.17
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.17 built; deploy pending |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.17 deploy pending; oauth.json needs relay format + redirect_base |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.17 ✓ |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.17 ✓ |
+
+## Recently Completed (2026-05-07)
+
+✅ Unbound DNS fixed — vernex.net → 172.17.0.132 (was wrong domain field: vernex.net instead of net)
+✅ /etc/hosts vernex.net workaround removed from node1
+✅ NOTICE file added to repo root (BSL 1.1 compliance, commit 5cf4e5c)
+✅ vernex-dashboard removed from node2 (bootstrap script was accidentally run on compute node)
 
 ## What Was Just Completed (v0.12.17 — graceful shutdown deregister)
 
@@ -706,20 +713,17 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 - Replay protection — 30s timestamp window on inter-node requests
 - Trust request approval — operator must approve new node public keys via dashboard
 
-## Immediate Next Steps (in priority order)
-1. **Deploy v0.12.17 on both nodes**
-   ```bash
-   ssh ericgeer@172.17.0.182 "cd ~/vernex && git config pull.rebase false && git pull && cd daemon && go build -o vernex-node . && sudo systemctl stop vernex-daemon && sudo cp vernex-node /usr/local/bin/vernex-node && sudo systemctl start vernex-daemon"
-   ```
-2. **node2 oauth.json** — ensure relay format (no google_ keys); redirect_base will auto-detect from daemon /status on first `/auth/login` hit:
-   ```json
-   { "session_secret": "<generate>", "relay_url": "https://vernex.net:5443" }
-   ```
-3. **Fix Unbound DNS for vernex.net on LAN devices** — LAN clients need `vernex.net` to resolve to the bootstrap/relay LAN IP so OAuth redirect completes without hitting the public internet hop; add a local override in OPNsense Unbound (or `/etc/hosts` on each node).
-4. **Port 7701 external test via hotspot** — connect a device to mobile hotspot, hit `https://76.244.40.49:7701/status`; confirms daemon reachable from outside LAN for future remote-node support.
-5. **NOTICE file — BSL 1.1 compliance** — create `NOTICE` at repo root with: project name, copyright line, patent pending notice (U.S. App. No. 64/015,885), and BSL change date / change license fields.
-6. **Non-provisional patent prep** — deadline March 24, 2027; begin drafting formal claims around the two-class token system, Commons Review consent gate, and zero-touch enrollment. Consider engaging a patent attorney by Q3 2026.
-7. **ML-DSA + ML-KEM upgrade** — upgrade `buildTLSConfig` to issue CA-signed ML-DSA TLS certs (enables full `VerifyTLSPeerCert` enforcement); migrate `VernexCert` from JSON to DER X.509 when Go 1.24+ adds ML-DSA stdlib support; add ML-KEM for key encapsulation on inter-node channels.
+## Outstanding Items
+
+| # | Task | Notes |
+|---|------|-------|
+| 1 | **Non-provisional patent prep** | Deadline March 24, 2027. Attorney needed Q3 2026. |
+| 2 | **ML-DSA + ML-KEM upgrade** | Replace ed25519/X25519. NIST FIPS 203/204. |
+| 3 | **IPv6 link-local filter** | mDNS fe80:: log noise only — not a functional blocker. Deferred indefinitely. Both nodes stable without it. |
+
+## Key Design Rules
+- **Dashboard:** node1 (bootstrap) only. Never install vernex-dashboard on compute nodes.
+- **Update scripts:** node1 = vernex-bootstrap-setup.sh / node2 = vernex-node-setup.sh. Never swap.
 
 ## Design Constraints (never violate)
 - All cryptography must become post-quantum resistant (ML-DSA + ML-KEM, NIST FIPS 203/204)
