@@ -1,7 +1,7 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-May 7, 2026
+May 8, 2026 (End of Session)
 
 ## Current Version
 v0.12.17
@@ -12,12 +12,14 @@ v0.12.17
 | vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.17 ✓ |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.17 ✓ |
 
-## Recently Completed (2026-05-07)
+## Recently Completed (2026-05-08)
 
-✅ Unbound DNS fixed — vernex.net → 172.17.0.132 (was wrong domain field: vernex.net instead of net)
-✅ /etc/hosts vernex.net workaround removed from node1
-✅ NOTICE file added to repo root (BSL 1.1 compliance, commit 5cf4e5c)
-✅ vernex-dashboard removed from node2 (bootstrap script was accidentally run on compute node)
+✅ Unbound DNS fixed — vernex.net → 172.17.0.132 (OPNsense host override had wrong domain field)
+✅ /etc/hosts workaround removed from node1
+✅ NOTICE file added — BSL 1.1 compliance (commit 5cf4e5c)
+✅ vernex-dashboard removed from node2 (accidentally installed via bootstrap script)
+✅ RUNBOOK.md added to repo root — replaces vernex_runbook.docx
+✅ ARCH_SPEC.md added to repo root — replaces vernex_architecture_spec.docx
 
 ## What Was Just Completed (v0.12.17 — graceful shutdown deregister)
 
@@ -719,11 +721,16 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 |---|------|-------|
 | 1 | **Non-provisional patent prep** | Deadline March 24, 2027. Attorney needed Q3 2026. |
 | 2 | **ML-DSA + ML-KEM upgrade** | Replace ed25519/X25519. NIST FIPS 203/204. |
-| 3 | **IPv6 link-local filter** | mDNS fe80:: log noise only — not a functional blocker. Deferred indefinitely. Both nodes stable without it. |
+| 3 | **Let's Encrypt cert renewal** | vernex.net:5443 expires 2026-08-02. |
+| 4 | **IPv6 link-local filter** | mDNS fe80:: log noise only — deferred indefinitely. Both nodes stable. |
 
 ## Key Design Rules
 - **Dashboard:** node1 (bootstrap) only. Never install vernex-dashboard on compute nodes.
 - **Update scripts:** node1 = vernex-bootstrap-setup.sh / node2 = vernex-node-setup.sh. Never swap.
+- **Docs:** RUNBOOK.md and ARCH_SPEC.md live in repo root. Claude Code must update both alongside CONTINUITY.md after every session commit.
+
+## Workflow Preferences
+- Claude Code must update RUNBOOK.md and ARCH_SPEC.md after every session alongside CONTINUITY.md.
 
 ## Design Constraints (never violate)
 - All cryptography must become post-quantum resistant (ML-DSA + ML-KEM, NIST FIPS 203/204)
