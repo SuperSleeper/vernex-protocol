@@ -9,8 +9,8 @@ v0.12.17
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.17 ✓ |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.17 ✓ |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ |
 
 ## Recently Completed (2026-05-08)
 
@@ -20,6 +20,17 @@ v0.12.17
 ✅ vernex-dashboard removed from node2 (accidentally installed via bootstrap script)
 ✅ RUNBOOK.md added to repo root — replaces vernex_runbook.docx
 ✅ ARCH_SPEC.md added to repo root — replaces vernex_architecture_spec.docx
+✅ v0.12.18 Phase 7a ML-DSA upgrade — mldsa_public_key in /status and /peers responses; own key written to node.json; hybrid signing already in place (additive, not yet enforced per-peer)
+
+## What Was Just Completed (v0.12.18 — Phase 7a ML-DSA keypair + hybrid signing)
+
+- `mldsa_public_key` added to `/status` response (`statusResponse` struct in node.go)
+- `mldsa_public_key` added to `/peers` response (`peerOut` struct in handlers.go)
+- `MLDSAPublicKey` added to `PeerEntry` (peer.go); populated from `cfg.PeerNodes` on `/register`, preserved across re-registers
+- `mldsa_public_key` added to `NodeConfig` (config.go); written to `node.json` on first startup after keypair load
+- Hybrid signing (`X-Vernex-Signature-MLDSA`) already in place since v0.8.0; this phase surfaces keys via API
+- ML-DSA enforcement remains per-peer opt-in (set `mldsa_public_key` in `peer_nodes[]` config to enforce)
+- `cloudflare/circl v1.6.3` (mldsa44) already in go.mod — no new dependency needed
 
 ## What Was Just Completed (v0.12.17 — graceful shutdown deregister)
 

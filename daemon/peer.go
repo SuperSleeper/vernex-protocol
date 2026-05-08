@@ -26,8 +26,9 @@ type PeerEntry struct {
 	ExternalPort  int             `json:"external_port,omitempty"`
 	LastSeen      time.Time       `json:"last_seen"`
 	PushedStatus  json.RawMessage `json:"pushed_status,omitempty"` // last /status payload pushed on heartbeat
-	CertVerified  bool            `json:"cert_verified"`            // true if VernexCert chain verified via TrustStore
-	TrustApproved bool            `json:"trust_approved"`           // true if operator approved or CA-verified
+	CertVerified   bool            `json:"cert_verified"`             // true if VernexCert chain verified via TrustStore
+	TrustApproved  bool            `json:"trust_approved"`            // true if operator approved or CA-verified
+	MLDSAPublicKey string          `json:"mldsa_public_key,omitempty"` // base64 ML-DSA 44 public key; populated from cfg.PeerNodes on register
 }
 
 // PeerRegistry holds in-memory heartbeat registrations from peer nodes.

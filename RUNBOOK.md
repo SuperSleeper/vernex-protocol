@@ -32,7 +32,7 @@ Vernex Protocol is a distributed home node compute network with a two-class toke
 | Core language | Go (node daemon) |
 | Dashboard language | Python + Flask |
 | Target hardware | Budget consumer hardware, Raspberry Pi capable |
-| Current version | v0.12.17 |
+| Current version | v0.12.18 |
 
 ---
 
@@ -57,8 +57,8 @@ Vernex Protocol is a distributed home node compute network with a two-class toke
 
 | Node | Hostname | OS | Hardware | Node ID | Role | Status |
 |------|----------|----|----------|---------|------|--------|
-| vernex-node1 | vernex-node1 | Pop!_OS 24.04 | RTX 3070 8GB / 64GB RAM | VRX-54b89a1684e21ae4 | Bootstrap — daemon, dashboard, nginx, auth relay | Active v0.12.17 |
-| vernex-node2 | vernex-node2 | Pop!_OS 24.04 COSMIC | HP Victus / RTX 4070 Max-Q / 60GB RAM | VRX-a5474b585793501c | Compute node | Active v0.12.17 |
+| vernex-node1 | vernex-node1 | Pop!_OS 24.04 | RTX 3070 8GB / 64GB RAM | VRX-54b89a1684e21ae4 | Bootstrap — daemon, dashboard, nginx, auth relay | Active v0.12.18 |
+| vernex-node2 | vernex-node2 | Pop!_OS 24.04 COSMIC | HP Victus / RTX 4070 Max-Q / 60GB RAM | VRX-a5474b585793501c | Compute node | Active v0.12.18 |
 
 ---
 
@@ -181,7 +181,7 @@ sudo apt install -y curl jq htop net-tools nmap tmux
 
 ## Section 2: Vernex Daemon — Go Node [DONE]
 
-Go daemon v0.12.17. Listens on port 7700 (P2P TCP/UDP) and port 7701 (HTTPS API). Stable VRX- node ID persisted to config/node.json. Tracks uptime, contribution score, peers. Exposes /status, /health, /submit, /consent, /queue, /peers, /register, /deregister, /stun endpoints. Graceful SIGTERM deregister — sends /deregister to peers, dashboard updates immediately.
+Go daemon v0.12.18. Listens on port 7700 (P2P TCP/UDP) and port 7701 (HTTPS API). Stable VRX- node ID persisted to config/node.json. Tracks uptime, contribution score, peers. Exposes /status, /health, /submit, /consent, /queue, /peers, /register, /deregister, /stun endpoints. Graceful SIGTERM deregister — sends /deregister to peers, dashboard updates immediately.
 
 ### Build (compute node — vernex-node2)
 
@@ -218,7 +218,7 @@ Flask dashboard at `http://172.17.0.132:5080` (nginx proxied, Google auth requir
 
 ## Section 4: Two-Node P2P Setup [DONE]
 
-Both nodes on v0.12.17. P2P confirmed over LAN (LOCAL connection type) and external networks (RELAYED via STUN bootstrap). Node-2 tested on T-Mobile hotspot — ONLINE with relay badge.
+Both nodes on v0.12.18. P2P confirmed over LAN (LOCAL connection type) and external networks (RELAYED via STUN bootstrap). Node-2 tested on T-Mobile hotspot — ONLINE with relay badge.
 
 DNS: `_vernex._tcp.vernex.net TXT → bootstrap=76.244.40.49:7701` ✅
 
@@ -340,7 +340,8 @@ curl -fsSL "http://172.17.0.132:5001/install?token=<token-id>" | bash
 | v0.12.14 | Central OAuth relay at vernex.net:5443 |
 | v0.12.15 | Relay port 5003 fix, requirements cleanup, /etc/hosts bootstrap step |
 | v0.12.16 | git pull.rebase fix, Ollama model detection fix, redirect_base auto-detect |
-| v0.12.17 | Fix binary replacement (Text file busy) + graceful SIGTERM /deregister |
+| v0.12.18 | Fix binary replacement (Text file busy) + graceful SIGTERM /deregister |
+| v0.12.18 | Phase 7a ML-DSA: mldsa_public_key in /status + /peers; own key written to node.json (additive, not yet enforced) |
 
 ---
 
@@ -428,7 +429,7 @@ vernex-node ca token --count 5
 | Node-2 git pull — divergent branches | `git config pull.rebase false` then `git pull origin main --allow-unrelated-histories` |
 | Node-2 config/node.json owned by root after systemd first run | `sudo chown ericgeer:ericgeer ~/vernex/config/node.json` |
 | Node-2 COSMIC DE config wipes on improper shutdown | `sudo apt install --reinstall cosmic-comp cosmic-session cosmic-greeter`; backup with `cp -r ~/.config/cosmic ~/.config/cosmic.backup` |
-| Binary replacement "Text file busy" | Daemon must be fully stopped before `cp` — fixed in v0.12.17 install script |
+| Binary replacement "Text file busy" | Daemon must be fully stopped before `cp` — fixed in v0.12.18 install script |
 | Unbound DNS returning public IP for vernex.net | Host override had `vernex.net` in Host field — must be `vernex` in Host, `net` in Domain |
 | vernex-dashboard crash-looping on node2 | Bootstrap setup script was accidentally run on compute node — dashboard removed from node2 |
 | WSL2 enrollment — systemd not available | Add `[boot]\nsystemd=true` to `/etc/wsl.conf`, then `wsl --shutdown` and reopen |

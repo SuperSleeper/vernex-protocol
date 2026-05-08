@@ -19,6 +19,7 @@ type PeerNode struct {
 
 type NodeConfig struct {
 	NodeID               string     `json:"node_id"`
+	MLDSAPublicKey       string     `json:"mldsa_public_key,omitempty"` // base64 own ML-DSA 44 public key; written on first startup
 	SocialPartitionPct   int        `json:"social_partition_pct"`
 	PersonalPartitionPct int        `json:"personal_partition_pct"`
 	DaemonPort           int        `json:"daemon_port"`

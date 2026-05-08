@@ -306,11 +306,17 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 			for _, p := range node.cfg.PeerNodes {
 				if p.Name == req.NodeID {
 					entry.TrustApproved = true
+					if p.MLDSAPublicKey != "" {
+						entry.MLDSAPublicKey = p.MLDSAPublicKey
+					}
 					break
 				}
 				if raw, err := base64.StdEncoding.DecodeString(p.PublicKey); err == nil && len(raw) == ed25519.PublicKeySize {
 					if nodeIDFromPublicKey(ed25519.PublicKey(raw)) == req.NodeID {
 						entry.TrustApproved = true
+						if p.MLDSAPublicKey != "" {
+							entry.MLDSAPublicKey = p.MLDSAPublicKey
+						}
 						break
 					}
 				}
@@ -322,6 +328,9 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 				}
 				if existing.TrustApproved {
 					entry.TrustApproved = true
+				}
+				if existing.MLDSAPublicKey != "" && entry.MLDSAPublicKey == "" {
+					entry.MLDSAPublicKey = existing.MLDSAPublicKey
 				}
 			}
 			node.peerRegistry.Register(entry)
@@ -384,6 +393,7 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 				LastSeenAgoSec int64  `json:"last_seen_ago_sec"`
 				CertVerified   bool   `json:"cert_verified"`
 				TrustApproved  bool   `json:"trust_approved"`
+				MLDSAPublicKey string `json:"mldsa_public_key,omitempty"`
 			}
 			out := make([]peerOut, 0, len(peers))
 			for _, p := range peers {
@@ -396,6 +406,7 @@ func startHTTPServer(node *Node, tlsCfg *tls.Config, configDir string) {
 					LastSeenAgoSec: int64(time.Since(p.LastSeen).Seconds()),
 					CertVerified:   p.CertVerified,
 					TrustApproved:  p.TrustApproved,
+					MLDSAPublicKey: p.MLDSAPublicKey,
 				})
 			}
 			json.NewEncoder(w).Encode(out)

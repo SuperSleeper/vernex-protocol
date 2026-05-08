@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -231,6 +232,20 @@ func main() {
 	if err != nil {
 		fmt.Printf("  [!] ML-DSA keypair error: %v — exiting\n", err)
 		os.Exit(1)
+	}
+	// Persist own ML-DSA public key to node.json so operators can share it with peers.
+	if mldsaPubKey != nil {
+		if raw, merr := mldsaPubKey.MarshalBinary(); merr == nil {
+			mldsaB64 := base64.StdEncoding.EncodeToString(raw)
+			if cfg.MLDSAPublicKey != mldsaB64 {
+				cfg.MLDSAPublicKey = mldsaB64
+				if serr := saveConfig(cfg); serr != nil {
+					fmt.Printf("  [!] Could not save ML-DSA key to node.json: %v\n", serr)
+				} else {
+					fmt.Printf("  [✓] ML-DSA public key written to node.json\n")
+				}
+			}
+		}
 	}
 
 	tlsCfg, err := buildTLSConfig(privKey, pubKey, cfg.NodeID)

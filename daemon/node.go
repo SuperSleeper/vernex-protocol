@@ -57,8 +57,9 @@ type statusResponse struct {
 	ExternalPort  int    `json:"external_port,omitempty"`
 	DirectPeers   int    `json:"direct_peers"`
 	LocalPeers    int    `json:"local_peers"`
-	CertVerified  bool   `json:"cert_verified"`  // true if node.crt exists (CA-enrolled, not TOFU)
-	TrustApproved bool   `json:"trust_approved"` // true if node.crt + root.crt present (full chain enrolled)
+	CertVerified   bool   `json:"cert_verified"`             // true if node.crt exists (CA-enrolled, not TOFU)
+	TrustApproved  bool   `json:"trust_approved"`            // true if node.crt + root.crt present (full chain enrolled)
+	MLDSAPublicKey string `json:"mldsa_public_key,omitempty"` // base64 ML-DSA 44 public key of this node
 }
 
 type SubmitRequest struct {
@@ -195,7 +196,7 @@ func NewNode(cfg NodeConfig, configDir string, privKey ed25519.PrivateKey, pubKe
 			StartedAt:         time.Now(),
 			Port:              cfg.DaemonPort,
 			APIPort:           cfg.APIPort,
-			Version:           "0.12.17",
+			Version:           "0.12.18",
 			SocialPartition:   cfg.SocialPartitionPct,
 			PersonalPartition: cfg.PersonalPartitionPct,
 		},
@@ -249,17 +250,24 @@ func getOwnStatus(n *Node) statusResponse {
 	_, certErr := os.Stat(filepath.Join(n.configDir, "node.crt"))
 	certVerified := certErr == nil
 	_, rootErr := os.Stat(filepath.Join(n.configDir, "root.crt"))
+	var mldsaB64 string
+	if n.mldsaPubKey != nil {
+		if raw, err := n.mldsaPubKey.MarshalBinary(); err == nil {
+			mldsaB64 = base64.StdEncoding.EncodeToString(raw)
+		}
+	}
 	return statusResponse{
-		NodeStats:     n.getStats(),
-		IPAddress:     outboundIP("8.8.8.8"),
-		Gateway:       defaultGateway(),
-		PublicIP:      pubIP,
-		ExternalIP:    extIP,
-		ExternalPort:  int(n.externalPort.Load()),
-		DirectPeers:   directCount,
-		LocalPeers:    localCount,
-		CertVerified:  certVerified,
-		TrustApproved: certVerified && rootErr == nil,
+		NodeStats:      n.getStats(),
+		IPAddress:      outboundIP("8.8.8.8"),
+		Gateway:        defaultGateway(),
+		PublicIP:       pubIP,
+		ExternalIP:     extIP,
+		ExternalPort:   int(n.externalPort.Load()),
+		DirectPeers:    directCount,
+		LocalPeers:     localCount,
+		CertVerified:   certVerified,
+		TrustApproved:  certVerified && rootErr == nil,
+		MLDSAPublicKey: mldsaB64,
 	}
 }
 
@@ -267,7 +275,7 @@ func (n *Node) printBanner() {
 	s := n.getStats()
 	fmt.Println("╔══════════════════════════════════════╗")
 	fmt.Println("║       VERNEX PROTOCOL NODE           ║")
-	fmt.Println("║       v0.12.17 — Patent Pending      ║")
+	fmt.Println("║       v0.12.18 — Patent Pending      ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("\n  Node ID   : %s\n", s.NodeID)
 	fmt.Printf("  Ed25519   : %s\n", base64.StdEncoding.EncodeToString(n.publicKey))
