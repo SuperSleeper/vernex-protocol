@@ -627,15 +627,16 @@ textarea#prompt:disabled{opacity:.45;cursor:not-allowed}
     </div>
     <div class="ctx-body" id="ctx-body">
       <textarea id="game-context" spellcheck="false">{{ game_context }}</textarea>
-      <div class="ctx-actions">
-        <button id="start-btn" onclick="startGame()">&#9654; Start Game</button>
-        <span class="started-badge" id="started-badge">&#10003; Context locked &#8212; game in progress</span>
-      </div>
     </div>
   </div>
 
+  <div class="ctx-actions">
+    <button id="start-btn" onclick="startGame()">&#9654; Start Game</button>
+    <span class="started-badge" id="started-badge">&#10003; Context locked &#8212; game in progress</span>
+  </div>
+
   <div id="chat-log">
-    <div class="welcome">Expand <strong>&#9881; Game Context</strong> above and click <strong>&#9654; Start Game</strong> to begin your adventure.</div>
+    <div class="welcome">Click <strong>&#9654; Start Game</strong> above to begin your adventure.</div>
   </div>
 
   <form id="game-form" onsubmit="sendTurn(event)">
