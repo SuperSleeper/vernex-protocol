@@ -513,6 +513,9 @@ document.getElementById('chat-form').addEventListener('submit',async e=>{
     log.scrollTop=log.scrollHeight;
   }
 });
+document.getElementById('prompt').addEventListener('keydown',function(e){
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.getElementById('chat-form').requestSubmit();}
+});
 </script>
 </body>
 </html>"""
@@ -785,6 +788,9 @@ function resetGame(){
   document.getElementById('prompt').value='';
   document.getElementById('routed-meta').textContent='';
 }
+document.getElementById('prompt').addEventListener('keydown',function(e){
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(gameStarted)sendTurn(e);}
+});
 </script>
 </body>
 </html>"""
