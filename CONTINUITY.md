@@ -1,16 +1,25 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-May 8, 2026 (End of Session)
+June 3, 2026 (End of Session)
 
 ## Current Version
-v0.12.17
+v0.12.18
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
 | vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ |
+
+## Recently Completed (2026-06-03)
+
+✅ Text adventure game page added at `/game` (dashboard/app.py)
+✅ `/api/models` endpoint — fetches available Ollama models from localhost:11434/api/tags
+✅ `/api/game/chat` endpoint — multi-turn Ollama chat via messages array (bypasses vernex queue for full conversation history)
+✅ `🎮 Game` button added to `/ui` header, linking to `/game`
+✅ `/ui` model selector updated to load dynamically from `/api/models`
+✅ Game features: collapsible context panel, locked-on-start context, markdown rendering (marked.js), dynamic model selector, full conversation history client-side, Reset Game button
 
 ## Recently Completed (2026-05-08)
 

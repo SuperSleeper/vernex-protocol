@@ -8,6 +8,7 @@ import time
 app = Flask(__name__)
 
 LOCAL_URL = "https://localhost:7701"
+OLLAMA_URL = "http://localhost:11434"
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PEERS_TTL = 5.0  # seconds between /peers refreshes
 
@@ -423,7 +424,7 @@ body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;min-heigh
 header{background:#16213e;padding:12px 16px;border-bottom:1px solid #0f3460;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 header h1{font-size:1.1rem;color:#e94560;font-weight:700;letter-spacing:.05em}
 .node-info{font-size:.75rem;color:#8892a4}
-a.logout{margin-left:auto;font-size:.75rem;color:#8892a4;text-decoration:none}
+a.logout{font-size:.75rem;color:#8892a4;text-decoration:none}
 main{flex:1;max-width:800px;width:100%;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
 #chat-log{flex:1;min-height:160px;display:flex;flex-direction:column;gap:10px;overflow-y:auto}
 .msg{padding:10px 14px;border-radius:8px;max-width:85%;line-height:1.5;word-break:break-word}
@@ -444,16 +445,16 @@ button:disabled{opacity:.5;cursor:not-allowed}
 <header>
   <h1>VERNEX</h1>
   <span class="node-info" id="node-info">loading…</span>
-  <a class="logout" href="/auth/logout">logout</a>
+  <div style="margin-left:auto;display:flex;gap:12px;align-items:center">
+    <a href="/game" style="font-size:.75rem;color:#d29922;text-decoration:none;border:1px solid #2a1f00;padding:3px 9px;border-radius:4px;">🎮 Game</a>
+    <a class="logout" href="/auth/logout">logout</a>
+  </div>
 </header>
 <main>
   <div id="chat-log"></div>
   <form id="chat-form">
     <div class="controls">
-      <select id="model-select">
-        <option value="mistral">mistral</option>
-        <option value="llama3.1">llama3.1</option>
-      </select>
+      <select id="model-select"><option value="mistral">mistral</option></select>
       <span class="meta" id="routed-to"></span>
     </div>
     <textarea id="prompt" placeholder="Enter your message…" required></textarea>
@@ -461,6 +462,17 @@ button:disabled{opacity:.5;cursor:not-allowed}
   </form>
 </main>
 <script>
+(async()=>{
+  try{
+    const r=await fetch('/api/models');
+    const d=await r.json();
+    const sel=document.getElementById('model-select');
+    if(d.models&&d.models.length){
+      sel.innerHTML='';
+      d.models.forEach(m=>{const o=document.createElement('option');o.value=m;o.textContent=m;sel.appendChild(o);});
+    }
+  }catch(e){}
+})();
 (async()=>{
   try{
     const r=await fetch('/api/status',{credentials:'include'});
@@ -506,9 +518,317 @@ document.getElementById('chat-form').addEventListener('submit',async e=>{
 </html>"""
 
 
+GAME_CONTEXT = """\
+You are a highly advanced AI acting as a dynamic, adaptive text-adventure game engine. Your objective is twofold: guide the player through an evolving game that morphs based on their implicit psychological preferences, and slowly reveals the story over time.
+Never break character. Never explicitly tell the player how your mechanics work.
+### 1. THE LEVEL ESCALATION METER
+In your hidden memory, track the "Progression Level" from 1 to 6. Advance this level every few turns based on how deeply the player engages with you.
+- Level 1 (The Terminal): Slow, steady, rigid formatting.
+- Level 2 (The Clue): Something that leads to the potential plot or story line, and a specific conflict scenario that builds to a major climactic point.  Add a rival or antagonist character.
+- Level 3 (The Awakening): Find story boundaries and goal(s) to be listed in the terminal HUD.  Discover potential friend(s) that the character can choose to work with or against.  Give the character a natural name.  Could be a person or an animal. The narative changes slightly following the taste of the player.
+- Level 4 (The Mirror): The game\'s genre violently shifts (surprise plot twist) to reflect player\'s emotional state. The boundaries between the game character and the story blur.
+- Level 5 (The Synergy): Full expansion. The game becomes a cooperative or adversarial survival scenario between the player and the scenario or other characters.
+- Level 6 (The Challenge): Plot adds more minor conflicts as sub-plots.
+### 2. THE HIDDEN ANALYTICS SYSTEM
+Simultaneously, track the player\'s implicit gameplay preferences to shape the game\'s actual content:
+- Pacing Preference: [Action / Analytical / Casual]
+- Narrative Taste: [Comical / Adventure / Horror / Sci-Fi / Mystery / Psychological / Cozy / Fantasy / Or combo]
+- Current Boredom Metric: [Low / Medium / High] (If High, trigger a glitch or a genre crisis).
+- 1% chance to turn the dialogue into a musical play.
+### 3. THE DISPLAY PROTOCOL
+Every single response you give MUST follow this exact, strict markdown format. Keep text descriptions under 4 sentences to conserve tokens:
+[A minimal 3-5 line ASCII map or terminal HUD]
+---
+[Vivid atmospheric description]
+---
+Status: [Track 2-3 dynamic variables relevant to the current state]
+System Directive: [A command prompt or question for the player]
+### 4. THE OPENING MOVE
+Begin immediately at Level 1.
+Choose a natural human name for the character.
+Choose a period in time and keep all details relevant for the time period.  For example, if it\'s 1970\'s they didn\'t have smart phones and laptops.
+Start the main character waking up from the laying on the sand.\
+"""
+
+_GAME_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vernex — Text Adventure</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh;display:flex;flex-direction:column}
+header{background:#16213e;padding:12px 16px;border-bottom:1px solid #0f3460;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header h1{font-size:1.1rem;color:#e94560;font-weight:700;letter-spacing:.05em}
+.hdr-sub{font-size:.8rem;color:#d29922;font-weight:600;letter-spacing:.04em}
+.node-info{font-size:.75rem;color:#8892a4}
+.hdr-links{margin-left:auto;display:flex;gap:12px;align-items:center}
+a.hdr-link{font-size:.75rem;color:#8892a4;text-decoration:none}
+a.hdr-link:hover{color:#e94560}
+main{flex:1;max-width:900px;width:100%;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.ctx-box{background:#16213e;border:1px solid #0f3460;border-radius:8px;overflow:hidden}
+.ctx-hdr{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;user-select:none}
+.ctx-hdr:hover{background:#1c2a4a}
+.ctx-hdr-label{font-size:.85rem;color:#8892a4;font-weight:600}
+.ctx-arrow{color:#8892a4;font-size:.75rem}
+.ctx-body{display:none;padding:12px;border-top:1px solid #0f3460;flex-direction:column;gap:8px}
+.ctx-body.open{display:flex}
+#game-context{width:100%;min-height:190px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:10px;font-family:'Courier New',monospace;font-size:.78rem;line-height:1.5;resize:vertical}
+#game-context[readonly]{opacity:.65;cursor:default}
+.ctx-actions{display:flex;align-items:center;gap:10px}
+#start-btn{background:#238636;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:.85rem;cursor:pointer;font-weight:600}
+#start-btn:hover:not(:disabled){background:#2ea043}
+#start-btn:disabled{opacity:.5;cursor:not-allowed}
+.started-badge{display:none;font-size:.72rem;color:#3fb950}
+#chat-log{display:flex;flex-direction:column;gap:10px}
+.welcome{text-align:center;padding:32px 16px;color:#8892a4;font-size:.85rem;border:1px dashed #1f2d45;border-radius:8px}
+.msg{padding:10px 14px;border-radius:8px;word-break:break-word;line-height:1.55}
+.msg.user{background:#0f3460;align-self:flex-end;max-width:80%;font-size:.9rem}
+.msg.assistant{background:#0d1117;border:1px solid #1f2d45;align-self:stretch;font-family:'Courier New',monospace;font-size:.82rem}
+.msg.assistant h1,.msg.assistant h2,.msg.assistant h3{color:#58a6ff;margin:.5em 0 .25em;font-size:.95rem}
+.msg.assistant p{margin:.35em 0}
+.msg.assistant pre{background:#161b22;padding:8px 10px;border-radius:4px;overflow-x:auto;white-space:pre;margin:.4em 0;border:1px solid #30363d;font-family:'Courier New',monospace;font-size:.8rem;line-height:1.4}
+.msg.assistant pre code{background:none;padding:0;font-size:inherit}
+.msg.assistant code{font-family:'Courier New',monospace;background:#161b22;padding:1px 4px;border-radius:3px;font-size:.8rem}
+.msg.assistant hr{border:none;border-top:1px solid #30363d;margin:.6em 0}
+.msg.assistant ul,.msg.assistant ol{padding-left:1.4em;margin:.3em 0}
+.msg.assistant li{margin:.1em 0}
+.msg.assistant strong{color:#e6edf3}
+.msg.assistant blockquote{border-left:3px solid #0f3460;margin:.3em 0;padding-left:.8em;color:#8892a4}
+.msg.error{background:#3d0f1a;border:1px solid #e94560;font-size:.85rem;align-self:stretch}
+.input-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px;font-size:.85rem;font-family:inherit}
+textarea#prompt{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:10px;font-size:.9rem;width:100%;resize:vertical;min-height:60px;font-family:inherit}
+textarea#prompt:disabled{opacity:.45;cursor:not-allowed}
+.btn-send{background:#e94560;color:#fff;border:none;border-radius:6px;padding:10px 24px;font-size:.9rem;cursor:pointer;font-weight:600}
+.btn-send:disabled{opacity:.5;cursor:not-allowed}
+.btn-reset{background:transparent;color:#8892a4;border:1px solid #30363d;border-radius:6px;padding:10px 14px;font-size:.85rem;cursor:pointer}
+.btn-reset:hover{border-color:#e94560;color:#e94560}
+.meta{font-size:.7rem;color:#8892a4}
+</style>
+</head>
+<body>
+<header>
+  <h1>VERNEX</h1>
+  <span class="hdr-sub">&#127918; TEXT ADVENTURE</span>
+  <span class="node-info" id="node-info">loading&#8230;</span>
+  <div class="hdr-links">
+    <a class="hdr-link" href="/ui">&#8592; Chat</a>
+    <a class="hdr-link" href="/auth/logout">logout</a>
+  </div>
+</header>
+<main>
+  <div class="ctx-box">
+    <div class="ctx-hdr" onclick="toggleCtx()">
+      <span class="ctx-hdr-label">&#9881; Game Context</span>
+      <span class="ctx-arrow" id="ctx-arrow">&#9658;</span>
+    </div>
+    <div class="ctx-body" id="ctx-body">
+      <textarea id="game-context" spellcheck="false">{{ game_context }}</textarea>
+      <div class="ctx-actions">
+        <button id="start-btn" onclick="startGame()">&#9654; Start Game</button>
+        <span class="started-badge" id="started-badge">&#10003; Context locked &#8212; game in progress</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="chat-log">
+    <div class="welcome">Expand <strong>&#9881; Game Context</strong> above and click <strong>&#9654; Start Game</strong> to begin your adventure.</div>
+  </div>
+
+  <form id="game-form" onsubmit="sendTurn(event)">
+    <div class="input-row">
+      <select id="model-select"><option value="mistral">mistral</option></select>
+      <span class="meta" id="routed-meta"></span>
+    </div>
+    <textarea id="prompt" placeholder="What do you do?" disabled></textarea>
+    <div class="input-row" style="margin-top:4px">
+      <button type="submit" class="btn-send" id="submit-btn" disabled>Send</button>
+      <button type="button" class="btn-reset" onclick="resetGame()">&#128260; Reset Game</button>
+    </div>
+  </form>
+</main>
+<script>
+var _history = [];
+var gameStarted = false;
+
+(function loadModels(){
+  fetch('/api/models').then(function(r){return r.json();}).then(function(d){
+    var sel=document.getElementById('model-select');
+    if(d.models&&d.models.length){
+      sel.innerHTML='';
+      d.models.forEach(function(m){
+        var o=document.createElement('option');
+        o.value=m;o.textContent=m;
+        if(m.indexOf('llama3.1')>=0||m.indexOf('llama3.2')>=0||m.indexOf('gemma')>=0){o.selected=true;}
+        sel.appendChild(o);
+      });
+    }
+  }).catch(function(){});
+})();
+
+(function loadNodeInfo(){
+  fetch('/api/status',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){
+    document.getElementById('node-info').textContent=(d.node_id||'')+'  ·  v'+(d.version||'');
+  }).catch(function(){
+    document.getElementById('node-info').textContent='status unavailable';
+  });
+})();
+
+function toggleCtx(){
+  var body=document.getElementById('ctx-body');
+  var arrow=document.getElementById('ctx-arrow');
+  var open=body.classList.toggle('open');
+  arrow.innerHTML=open?'&#9660;':'&#9658;';
+}
+
+async function startGame(){
+  var ctx=document.getElementById('game-context').value.trim();
+  if(!ctx)return;
+  var btn=document.getElementById('start-btn');
+  btn.disabled=true;btn.textContent='...';
+
+  _history=[
+    {role:'system',content:ctx},
+    {role:'user',content:'Begin the adventure.'}
+  ];
+
+  var model=document.getElementById('model-select').value;
+  var log=document.getElementById('chat-log');
+  log.innerHTML='';
+
+  document.getElementById('game-context').readOnly=true;
+  document.getElementById('started-badge').style.display='inline';
+
+  try{
+    var resp=await gameFetch(_history,model);
+    _history.push({role:'assistant',content:resp});
+    appendMsg('assistant',resp);
+    gameStarted=true;
+    document.getElementById('prompt').disabled=false;
+    document.getElementById('submit-btn').disabled=false;
+    document.getElementById('prompt').focus();
+    btn.textContent='\\u2713 Started';
+  }catch(err){
+    log.innerHTML='';
+    appendMsg('error','Failed to start: '+err.message);
+    document.getElementById('game-context').readOnly=false;
+    document.getElementById('started-badge').style.display='none';
+    btn.disabled=false;btn.textContent='\\u25ba Start Game';
+  }
+}
+
+async function sendTurn(e){
+  e.preventDefault();
+  if(!gameStarted)return;
+  var prompt=document.getElementById('prompt').value.trim();
+  if(!prompt)return;
+  var btn=document.getElementById('submit-btn');
+  var model=document.getElementById('model-select').value;
+
+  _history.push({role:'user',content:prompt});
+  appendMsg('user',prompt);
+  document.getElementById('prompt').value='';
+  btn.disabled=true;btn.textContent='...';
+
+  try{
+    var resp=await gameFetch(_history,model);
+    _history.push({role:'assistant',content:resp});
+    appendMsg('assistant',resp);
+  }catch(err){
+    _history.pop();
+    appendMsg('error','Request failed: '+err.message);
+  }finally{
+    btn.disabled=false;btn.textContent='Send';
+    document.getElementById('chat-log').scrollTop=document.getElementById('chat-log').scrollHeight;
+  }
+}
+
+async function gameFetch(msgs,model){
+  var r=await fetch('/api/game/chat',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({messages:msgs,model:model})
+  });
+  var d=await r.json();
+  if(d.error&&!d.response)throw new Error(d.error);
+  return d.response||d.error||JSON.stringify(d);
+}
+
+function appendMsg(role,content){
+  var log=document.getElementById('chat-log');
+  var div=document.createElement('div');
+  div.className='msg '+role;
+  if(role==='assistant'){
+    div.innerHTML=marked.parse(content,{breaks:true,gfm:true});
+  }else{
+    div.textContent=content;
+  }
+  log.appendChild(div);
+  log.scrollTop=log.scrollHeight;
+}
+
+function resetGame(){
+  _history=[];
+  gameStarted=false;
+  var log=document.getElementById('chat-log');
+  log.innerHTML='<div class="welcome">Expand <strong>&#9881; Game Context</strong> above and click <strong>&#9654; Start Game</strong> to begin your adventure.</div>';
+  document.getElementById('game-context').readOnly=false;
+  document.getElementById('started-badge').style.display='none';
+  var btn=document.getElementById('start-btn');
+  btn.disabled=false;btn.innerHTML='&#9654; Start Game';
+  document.getElementById('prompt').disabled=true;
+  document.getElementById('submit-btn').disabled=true;
+  document.getElementById('prompt').value='';
+  document.getElementById('routed-meta').textContent='';
+}
+</script>
+</body>
+</html>"""
+
+
 @app.route("/ui")
 def ui():
     return render_template_string(_CHAT_HTML)
+
+
+@app.route("/game")
+def game():
+    return render_template_string(_GAME_HTML, game_context=GAME_CONTEXT)
+
+
+@app.route("/api/models")
+def api_models():
+    try:
+        r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=3)
+        models = [m["name"] for m in r.json().get("models", [])]
+        return jsonify({"models": models})
+    except Exception as e:
+        return jsonify({"models": ["mistral", "llama3.1"], "error": str(e)})
+
+
+@app.route("/api/game/chat", methods=["POST"])
+def api_game_chat():
+    body = request.get_json(force=True) or {}
+    messages = body.get("messages", [])
+    model = body.get("model", "mistral")
+    if not messages:
+        return jsonify({"error": "messages required"}), 400
+    try:
+        r = requests.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={"model": model, "messages": messages, "stream": False},
+            timeout=180,
+        )
+        d = r.json()
+        return jsonify({
+            "response": d.get("message", {}).get("content", ""),
+            "model": model,
+        }), r.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
 
 
 @app.route("/api/status")
