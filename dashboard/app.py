@@ -470,6 +470,8 @@ button:disabled{opacity:.5;cursor:not-allowed}
     if(d.models&&d.models.length){
       sel.innerHTML='';
       d.models.forEach(m=>{const o=document.createElement('option');o.value=m;o.textContent=m;sel.appendChild(o);});
+      const pref=d.models.find(m=>m==='gemma4:e4b')||d.models[0];
+      sel.value=pref;
     }
   }catch(e){}
 })();
@@ -666,9 +668,10 @@ var gameStarted = false;
       d.models.forEach(function(m){
         var o=document.createElement('option');
         o.value=m;o.textContent=m;
-        if(m.indexOf('llama3.1')>=0||m.indexOf('llama3.2')>=0||m.indexOf('gemma')>=0){o.selected=true;}
         sel.appendChild(o);
       });
+      var pref=d.models.indexOf('gemma4:e4b')>=0?'gemma4:e4b':d.models[0];
+      sel.value=pref;
     }
   }).catch(function(){});
 })();
