@@ -493,6 +493,7 @@ document.getElementById('chat-form').addEventListener('submit',async e=>{
   userBubble.className='msg user';
   userBubble.textContent=prompt;
   log.appendChild(userBubble);
+  log.scrollTop=log.scrollHeight;
   document.getElementById('prompt').value='';
   btn.disabled=true;btn.textContent='…';
   try{
@@ -587,7 +588,7 @@ main{flex:1;max-width:900px;width:100%;margin:0 auto;padding:16px;display:flex;f
 #start-btn:hover:not(:disabled){background:#2ea043}
 #start-btn:disabled{opacity:.5;cursor:not-allowed}
 .started-badge{display:none;font-size:.72rem;color:#3fb950}
-#chat-log{display:flex;flex-direction:column;gap:10px}
+#chat-log{display:flex;flex-direction:column;gap:10px;flex:1;min-height:240px;overflow-y:auto}
 .welcome{text-align:center;padding:32px 16px;color:#8892a4;font-size:.85rem;border:1px dashed #1f2d45;border-radius:8px}
 .msg{padding:10px 14px;border-radius:8px;word-break:break-word;line-height:1.55}
 .msg.user{background:#0f3460;align-self:flex-end;max-width:80%;font-size:.9rem}
