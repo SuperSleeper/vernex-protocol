@@ -818,24 +818,41 @@ def api_models():
 
 @app.route("/api/game/chat", methods=["POST"])
 def api_game_chat():
-    body = request.get_json(force=True) or {}
-    messages = body.get("messages", [])
-    model = body.get("model", "mistral")
-    if not messages:
-        return jsonify({"error": "messages required"}), 400
     try:
+        body = request.get_json(force=True) or {}
+        messages = body.get("messages", [])
+        model = body.get("model", "mistral")
+        if not messages:
+            return jsonify({"error": "messages required"}), 400
+
+        last = messages[-1] if messages else {}
+        print(f"[game/chat] model={model!r} turns={len(messages)} last_role={last.get('role','?')!r}")
+
         r = requests.post(
             f"{OLLAMA_URL}/api/chat",
             json={"model": model, "messages": messages, "stream": False},
             timeout=180,
         )
-        d = r.json()
-        return jsonify({
-            "response": d.get("message", {}).get("content", ""),
-            "model": model,
-        }), r.status_code
+
+        try:
+            d = r.json()
+        except Exception:
+            return jsonify({
+                "error": f"Ollama non-JSON response (HTTP {r.status_code}): {r.text[:300]}"
+            }), 502
+
+        if r.status_code != 200:
+            err = d.get("error") or f"Ollama returned HTTP {r.status_code}"
+            print(f"[game/chat] ollama error: {err!r}")
+            return jsonify({"error": err}), 502
+
+        content = d.get("message", {}).get("content", "")
+        return jsonify({"response": content, "model": model})
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 503
+        import traceback
+        print(f"[game/chat] unhandled exception:\n{traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/status")
