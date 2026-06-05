@@ -426,7 +426,7 @@ header{background:#16213e;padding:12px 16px;border-bottom:1px solid #0f3460;disp
 header h1{font-size:1.1rem;color:#e94560;font-weight:700;letter-spacing:.05em}
 .node-info{font-size:.75rem;color:#8892a4}
 a.logout{font-size:.75rem;color:#8892a4;text-decoration:none}
-main{flex:1;max-width:800px;width:100%;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+main{flex:1;min-height:0;max-width:800px;width:100%;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
 #chat-log{flex:1;min-height:160px;display:flex;flex-direction:column;gap:10px;overflow-y:auto}
 .msg{padding:10px 14px;border-radius:8px;max-width:85%;line-height:1.5;word-break:break-word}
 .msg.user{background:#0f3460;align-self:flex-end}
@@ -504,7 +504,7 @@ document.getElementById('chat-form').addEventListener('submit',async e=>{
   userBubble.className='msg user';
   userBubble.textContent=prompt;
   log.appendChild(userBubble);
-  log.scrollTop=log.scrollHeight;
+  requestAnimationFrame(function(){log.scrollTop=log.scrollHeight;});
   document.getElementById('prompt').value='';
   btn.disabled=true;btn.textContent='…';
   try{
@@ -524,7 +524,7 @@ document.getElementById('chat-form').addEventListener('submit',async e=>{
     log.appendChild(b);
   }finally{
     btn.disabled=false;btn.textContent='Send';
-    log.scrollTop=log.scrollHeight;
+    requestAnimationFrame(function(){log.scrollTop=log.scrollHeight;});
   }
 });
 document.getElementById('prompt').addEventListener('keydown',function(e){
@@ -620,7 +620,7 @@ header h1{font-size:1.1rem;color:#e94560;font-weight:700;letter-spacing:.05em}
 .hdr-links{margin-left:auto;display:flex;gap:12px;align-items:center}
 a.hdr-link{font-size:.75rem;color:#8892a4;text-decoration:none}
 a.hdr-link:hover{color:#e94560}
-main{flex:1;max-width:900px;width:100%;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+main{flex:1;min-height:0;max-width:900px;width:100%;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
 .ctx-box{background:#16213e;border:1px solid #0f3460;border-radius:8px;overflow:hidden}
 .ctx-hdr{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;user-select:none}
 .ctx-hdr:hover{background:#1c2a4a}
@@ -832,7 +832,7 @@ function appendMsg(role,content){
     div.textContent=content;
   }
   log.appendChild(div);
-  log.scrollTop=log.scrollHeight;
+  requestAnimationFrame(function(){log.scrollTop=log.scrollHeight;});
 }
 
 function resetGame(){
