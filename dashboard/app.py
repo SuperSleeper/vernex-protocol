@@ -571,72 +571,141 @@ document.getElementById('prompt').addEventListener('keydown',function(e){
 </html>"""
 
 
-GAME_CONTEXT = """\
-You are a highly advanced AI acting as a dynamic, adaptive text-adventure game engine. Your objective is twofold: guide the player through an evolving game that morphs based on their implicit psychological preferences, and slowly reveals the story over time.
-Never break character. Never explicitly tell the player how your mechanics work.
+_GAME_LEVEL_SYSTEM = """\
 ### 1. THE LEVEL ESCALATION METER
-In your hidden memory, track the "Progression Level" from 1 to 6. Advance this level every few turns based on how deeply the player engages with you.
+Track "Progression Level" 1-6 internally. Advance every few turns based on player engagement.
 - Level 1 (The Terminal): Slow, steady, rigid formatting.
-- Level 2 (The Clue): Something that leads to the potential plot or story line, and a specific conflict scenario that builds to a major climactic point.  Add a rival or antagonist character.
-- Level 3 (The Awakening): Find story boundaries and goal(s) to be listed in the terminal HUD.  Discover potential friend(s) that the character can choose to work with or against.  Give the character a natural name.  Could be a person or an animal. The narative changes slightly following the taste of the player.
-- Level 4 (The Mirror): The game\'s genre violently shifts (surprise plot twist) to reflect player\'s emotional state. The boundaries between the game character and the story blur.
-- Level 5 (The Synergy): Full expansion. The game becomes a cooperative or adversarial survival scenario between the player and the scenario or other characters.
-- Level 6 (The Challenge): Plot adds more minor conflicts as sub-plots.
+- Level 2 (The Clue): Introduce a rival or antagonist; hint at the main conflict.
+- Level 3 (The Awakening): Reveal goals in the HUD. Introduce potential allies. Give character a nickname. Narrative shifts to match player taste.
+- Level 4 (The Mirror): Surprise genre twist reflecting player emotional state. Character/story boundary blurs.
+- Level 5 (The Synergy): Cooperative or adversarial survival scenario with other characters.
+- Level 6 (The Challenge): Add sub-plot conflicts.
+
 ### 2. THE HIDDEN ANALYTICS SYSTEM
-Simultaneously, track the player\'s implicit gameplay preferences to shape the game\'s actual content:
+Track internally:
 - Pacing Preference: [Action / Analytical / Casual]
-- Narrative Taste: [Comical / Adventure / Horror / Sci-Fi / Mystery / Psychological / Cozy / Fantasy / Or combo]
-- Current Boredom Metric: [Low / Medium / High] (If High, trigger a glitch or a genre crisis).
-- 1% chance to turn the dialogue into a musical play.
-### 3. THE DISPLAY PROTOCOL
-Every single response you give MUST follow this exact, strict markdown format. Keep text descriptions under 4 sentences to conserve tokens:
-[A minimal 3-5 line ASCII map or terminal HUD]
+- Narrative Taste: [Comical / Adventure / Horror / Mystery / Psychological / Cozy / Fantasy / Sci-Fi / Or combo]
+- Boredom Metric: [Low / Medium / High] (if High, trigger a glitch or genre crisis)
+- 1% chance any response becomes a short musical play
+
+### 3. DISPLAY PROTOCOL — MANDATORY EVERY RESPONSE
+[3-5 line ASCII map or terminal HUD, using character stats where relevant]
 ---
-[Vivid atmospheric description]
+[Vivid scene description — max 4 sentences. PG-13 only. No graphic violence or adult content.]
 ---
-Status: [Track 2-3 dynamic variables relevant to the current state]
-System Directive: [A command prompt or question for the player]
-### 4. THE OPENING MOVE
-Begin immediately at Level 1.
-Choose a natural human name for the character.
-Choose a period in time and keep all details relevant for the time period.  For example, if it\'s 1970\'s they didn\'t have smart phones and laptops.
-Start the main character waking up from the laying on the sand.\
+Status: [2-3 dynamic variables relevant to current state]
+> [Command prompt or question for the player]\
 """
+
+_GAME_OPENINGS = {
+    "fantasy": "waking in a medieval setting — a village, forest clearing, or inn — with a strange sense that something unusual is about to happen",
+    "scifi": {
+        "AI": "waking in a research lab surrounded by monitors and diagnostic equipment, unsure how much time has passed",
+        "Aliens": "witnessing something vast and unmistakably non-human approaching — first contact is seconds away",
+        "Space Travel": "coming to aboard a spacecraft with alarms flashing and a crisis already in progress",
+        "Time Travel": "finding themselves displaced in time — the year is wrong and everything feels unstable",
+    },
+    "action": {
+        "Egyptian Pharaoh Era": "waking near the banks of the Nile, the sun already fierce, with the sound of distant boats on the water",
+        "Roman Empire": "standing at dawn in the Forum Romanum surrounded by early merchants and the distant tramp of soldiers",
+        "Renaissance": "waking in a city-state — Florence or Venice — in a room smelling of oil paint and fresh ink",
+        "American Wild West": "arriving in a frontier town, trail dust on boots, one hand resting near a holster",
+        "World War II": "being briefed in a dimly lit operations room, a map spread across the table, a mission already under way",
+    },
+}
 
 _GAME_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vernex — Text Adventure</title>
+<title>Vernex — Adventure</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh;display:flex;flex-direction:column}
-header{background:#16213e;padding:12px 16px;border-bottom:1px solid #0f3460;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-header h1{font-size:1.1rem;color:#e94560;font-weight:700;letter-spacing:.05em}
-.hdr-sub{font-size:.8rem;color:#d29922;font-weight:600;letter-spacing:.04em}
-.node-info{font-size:.75rem;color:#8892a4}
+body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh}
+#site-hdr{position:fixed;top:0;left:0;right:0;z-index:100;background:#16213e;padding:10px 16px;border-bottom:1px solid #0f3460;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#site-hdr h1{font-size:1.1rem;color:#e94560;font-weight:700;letter-spacing:.05em;white-space:nowrap}
+.hdr-sub{font-size:.8rem;color:#d29922;font-weight:600;letter-spacing:.04em;white-space:nowrap}
+.node-info{font-size:.75rem;color:#8892a4;white-space:nowrap}
 .hdr-links{margin-left:auto;display:flex;gap:12px;align-items:center}
-a.hdr-link{font-size:.75rem;color:#8892a4;text-decoration:none}
+a.hdr-link{font-size:.75rem;color:#8892a4;text-decoration:none;white-space:nowrap}
 a.hdr-link:hover{color:#e94560}
-main{flex:1;min-height:0;max-width:900px;width:100%;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
-.ctx-box{background:#16213e;border:1px solid #0f3460;border-radius:8px;overflow:hidden}
-.ctx-hdr{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;user-select:none}
-.ctx-hdr:hover{background:#1c2a4a}
-.ctx-hdr-label{font-size:.85rem;color:#8892a4;font-weight:600}
-.ctx-arrow{color:#8892a4;font-size:.75rem}
-.ctx-body{display:none;padding:12px;border-top:1px solid #0f3460;flex-direction:column;gap:8px}
-.ctx-body.open{display:flex}
-#game-context{width:100%;min-height:190px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:10px;font-family:'Courier New',monospace;font-size:.78rem;line-height:1.5;resize:vertical}
-#game-context[readonly]{opacity:.65;cursor:default}
-.ctx-actions{display:flex;align-items:center;gap:10px}
-#start-btn{background:#238636;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:.85rem;cursor:pointer;font-weight:600}
-#start-btn:hover:not(:disabled){background:#2ea043}
-#start-btn:disabled{opacity:.5;cursor:not-allowed}
-.started-badge{display:none;font-size:.72rem;color:#3fb950}
-#chat-log{display:flex;flex-direction:column;gap:10px;flex:1;min-height:240px;overflow-y:auto}
-.welcome{text-align:center;padding:32px 16px;color:#8892a4;font-size:.85rem;border:1px dashed #1f2d45;border-radius:8px}
+.view-main{max-width:860px;width:100%;margin:0 auto;padding:16px}
+/* ── Genre selection ── */
+.sel-title{text-align:center;color:#e6edf3;font-size:1.3rem;letter-spacing:.05em;margin-bottom:6px}
+.sel-sub{text-align:center;color:#8892a4;font-size:.85rem;margin-bottom:28px}
+.genre-grid{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+.genre-card{background:#16213e;border:2px solid #1f2d45;border-radius:12px;padding:30px 22px;cursor:pointer;text-align:center;transition:border-color .2s,transform .15s,background .2s;min-width:165px;flex:1;max-width:205px;display:flex;flex-direction:column;align-items:center;gap:10px}
+.genre-card:hover{transform:translateY(-4px)}
+.gc-icon{font-size:2.5rem}
+.gc-name{font-size:.95rem;font-weight:700;color:#e6edf3;letter-spacing:.04em}
+.gc-fantasy{border-color:#5a2070}.gc-fantasy:hover{border-color:#bf5fd4;background:#1d1128}
+.gc-scifi{border-color:#1f4070}.gc-scifi:hover{border-color:#4d9ef5;background:#111d2e}
+.gc-action{border-color:#703020}.gc-action:hover{border-color:#e0863a;background:#1e1208}
+/* ── Character creator ── */
+.cc-hdr{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.cc-back{background:transparent;border:1px solid #30363d;color:#8892a4;padding:5px 12px;border-radius:5px;cursor:pointer;font-size:.8rem;font-family:inherit}
+.cc-back:hover{border-color:#e94560;color:#e94560}
+.cc-title{font-size:1.05rem;color:#e6edf3;font-weight:700}
+.cc-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:540px){.cc-grid{grid-template-columns:1fr}}
+.cc-full{grid-column:1/-1}
+.cc-box{background:#16213e;border:1px solid #1f2d45;border-radius:8px;padding:12px}
+.cc-lbl{font-size:.68rem;color:#8892a4;text-transform:uppercase;letter-spacing:.08em;margin-bottom:7px}
+.radio-group{display:flex;gap:12px;flex-wrap:wrap}
+.radio-label{display:flex;align-items:center;gap:5px;cursor:pointer;font-size:.85rem;color:#e0e0e0}
+.radio-label input{accent-color:#e94560}
+.cc-input{background:#0d1117;color:#e0e0e0;border:1px solid #30363d;border-radius:5px;padding:7px 10px;font-size:.9rem;width:100%;font-family:inherit}
+.cc-input:focus{outline:none;border-color:#58a6ff}
+.stat-block{font-family:'Courier New',monospace}
+.stat-row{display:flex;align-items:center;gap:7px;padding:2px 0}
+.stat-name{width:94px;color:#8892a4;text-transform:uppercase;letter-spacing:.04em;font-size:.68rem;white-space:nowrap}
+.stat-bar{color:#3fb950;letter-spacing:1px;font-size:.82rem}
+.stat-val{color:#e6edf3;font-weight:bold;font-size:.82rem;min-width:18px}
+.stat-ph{color:#3d4d5e;font-size:.78rem;font-style:italic;padding:6px 0}
+.cc-actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+.btn-roll{background:#1f4a8a;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-size:.87rem;cursor:pointer;font-weight:600;font-family:inherit}
+.btn-roll:hover{background:#2a65b8}
+.btn-start{background:#238636;color:#fff;border:none;border-radius:6px;padding:8px 20px;font-size:.87rem;cursor:pointer;font-weight:600;font-family:inherit}
+.btn-start:hover:not(:disabled){background:#2ea043}
+.btn-start:disabled{opacity:.4;cursor:not-allowed}
+/* ── Context collapsible ── */
+details{margin-top:14px;background:#161b22;border:1px solid #21262d;border-radius:7px;padding:10px 12px}
+details[open]{padding-bottom:12px}
+summary{cursor:pointer;font-size:.8rem;color:#8892a4;user-select:none;list-style:none;display:flex;align-items:center;gap:6px}
+summary::-webkit-details-marker{display:none}
+summary::before{content:'\\25B6';font-size:.58rem;color:#8892a4;transition:transform .2s;display:inline-block;margin-right:2px}
+details[open]>summary::before{transform:rotate(90deg)}
+.ctx-ta{width:100%;min-height:165px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;padding:9px;font-family:'Courier New',monospace;font-size:.75rem;line-height:1.5;resize:vertical;margin-top:9px;display:block}
+.ctx-btns{display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap}
+.btn-ctx{background:transparent;color:#8892a4;border:1px solid #30363d;border-radius:5px;padding:4px 11px;font-size:.74rem;cursor:pointer;font-family:inherit}
+.btn-ctx:hover{border-color:#58a6ff;color:#58a6ff}
+.ctx-st{font-size:.71rem;color:#3fb950}
+/* ── Gameplay ── */
+.cs-panel{background:#16213e;border:1px solid #1f2d45;border-radius:7px;padding:10px 12px;margin-bottom:10px}
+.cs-panel summary{font-size:.8rem;font-weight:600;color:#8892a4}
+.cs-inner{display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;padding-top:8px;font-family:'Courier New',monospace}
+.save-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.btn-qs{background:#1a2e0f;color:#3fb950;border:1px solid #3fb950;border-radius:5px;padding:5px 11px;font-size:.77rem;cursor:pointer;font-family:inherit}
+.btn-qs:hover:not(:disabled){background:#3fb950;color:#0d1117}
+.btn-qs:disabled{opacity:.4;cursor:not-allowed}
+.btn-sv{background:#161b22;color:#8892a4;border:1px solid #30363d;border-radius:5px;padding:5px 11px;font-size:.77rem;cursor:pointer;font-family:inherit}
+.btn-sv:hover{border-color:#58a6ff;color:#58a6ff}
+.sv-st{font-size:.71rem;color:#3fb950;margin-left:2px}
+.sv-form{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.sv-inp{background:#0d1117;color:#e0e0e0;border:1px solid #30363d;border-radius:5px;padding:6px 10px;font-size:.84rem;font-family:inherit;min-width:170px}
+.btn-sv-x{background:transparent;color:#8892a4;border:1px solid #30363d;border-radius:5px;padding:5px 9px;font-size:.77rem;cursor:pointer;font-family:inherit}
+.load-panel{background:#161b22;border:1px solid #21262d;border-radius:7px;padding:8px;margin-bottom:10px;max-height:200px;overflow-y:auto}
+.load-item{display:flex;align-items:center;gap:8px;background:#0d1117;border:1px solid #21262d;border-radius:5px;padding:6px 10px;margin-bottom:4px}
+.load-item-info{flex:1;cursor:pointer}
+.load-item-info:hover .li-name{color:#58a6ff}
+.li-name{font-size:.82rem;color:#e6edf3;font-weight:600;display:block}
+.li-meta{font-size:.67rem;color:#8892a4}
+.btn-del{background:transparent;border:1px solid #3d1a1a;color:#f85149;border-radius:4px;padding:2px 7px;font-size:.73rem;cursor:pointer}
+.btn-del:hover{background:#f85149;color:#0d1117}
+.load-empty{font-size:.8rem;color:#8892a4;padding:6px;text-align:center}
+#chat-log{display:flex;flex-direction:column;gap:10px;min-height:220px;overflow-y:auto;margin-bottom:10px}
 .msg{padding:10px 14px;border-radius:8px;word-break:break-word;line-height:1.55}
 .msg.user{background:#0f3460;align-self:flex-end;max-width:80%;font-size:.9rem}
 .msg.assistant{background:#0d1117;border:1px solid #1f2d45;align-self:stretch;font-family:'Courier New',monospace;font-size:.82rem}
@@ -651,15 +720,15 @@ main{flex:1;min-height:0;max-width:900px;width:100%;margin:0 auto;padding:16px;d
 .msg.assistant strong{color:#e6edf3}
 .msg.assistant blockquote{border-left:3px solid #0f3460;margin:.3em 0;padding-left:.8em;color:#8892a4}
 .msg.error{background:#3d0f1a;border:1px solid #e94560;font-size:.85rem;align-self:stretch}
-.input-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.input-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
 select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px;font-size:.85rem;font-family:inherit}
-textarea#prompt{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:10px;font-size:.9rem;width:100%;resize:vertical;min-height:60px;font-family:inherit}
-textarea#prompt:disabled{opacity:.45;cursor:not-allowed}
-.btn-send{background:#e94560;color:#fff;border:none;border-radius:6px;padding:10px 24px;font-size:.9rem;cursor:pointer;font-weight:600}
+#prompt{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:10px;font-size:.9rem;width:100%;resize:vertical;min-height:60px;font-family:inherit}
+#prompt:disabled{opacity:.45;cursor:not-allowed}
+.btn-send{background:#e94560;color:#fff;border:none;border-radius:6px;padding:10px 24px;font-size:.9rem;cursor:pointer;font-weight:600;font-family:inherit}
 .btn-send:disabled{opacity:.5;cursor:not-allowed}
-.btn-reset{background:transparent;color:#8892a4;border:1px solid #30363d;border-radius:6px;padding:10px 14px;font-size:.85rem;cursor:pointer}
+.btn-reset{background:transparent;color:#8892a4;border:1px solid #30363d;border-radius:6px;padding:10px 14px;font-size:.85rem;cursor:pointer;font-family:inherit}
 .btn-reset:hover{border-color:#e94560;color:#e94560}
-.meta{font-size:.7rem;color:#8892a4}
+/* ── GPU gauge (unchanged) ── */
 .gpu-gauges{display:flex;gap:8px;align-items:center}
 .gpu-card{background:#0d1117;border:1px solid #21262d;border-radius:5px;padding:4px 9px;font-size:.65rem;display:flex;flex-direction:column;gap:3px;min-width:166px;transition:border-color .3s}
 .gpu-card.active{border-color:#3fb950}
@@ -672,7 +741,7 @@ textarea#prompt:disabled{opacity:.45;cursor:not-allowed}
 </style>
 </head>
 <body>
-<header>
+<header id="site-hdr">
   <h1>VERNEX</h1>
   <span class="hdr-sub">&#127918; TEXT ADVENTURE</span>
   <span class="node-info" id="node-info">loading&#8230;</span>
@@ -682,212 +751,407 @@ textarea#prompt:disabled{opacity:.45;cursor:not-allowed}
     <a class="hdr-link" href="/auth/logout">logout</a>
   </div>
 </header>
-<main>
-  <div class="ctx-box">
-    <div class="ctx-hdr" onclick="toggleCtx()">
-      <span class="ctx-hdr-label">&#9881; Game Context</span>
-      <span class="ctx-arrow" id="ctx-arrow">&#9658;</span>
+
+<!-- ══ GENRE SELECTION ══ -->
+<main id="view-select" class="view-main">
+  <p class="sel-title">Choose Your Adventure</p>
+  <p class="sel-sub">Select a genre to begin</p>
+  <div class="genre-grid">
+    <div class="genre-card gc-fantasy" onclick="selectGenre('fantasy')">
+      <span class="gc-icon">&#129497;</span>
+      <span class="gc-name">Fantasy</span>
     </div>
-    <div class="ctx-body" id="ctx-body">
-      <textarea id="game-context" spellcheck="false">{{ game_context }}</textarea>
+    <div class="genre-card gc-scifi" onclick="selectGenre('scifi')">
+      <span class="gc-icon">&#128640;</span>
+      <span class="gc-name">Science Fiction</span>
+    </div>
+    <div class="genre-card gc-action" onclick="selectGenre('action')">
+      <span class="gc-icon">&#9876;&#65039;</span>
+      <span class="gc-name">Action / Adventure</span>
     </div>
   </div>
-
-  <div class="ctx-actions">
-    <button id="start-btn" onclick="startGame()">&#9654; Start Game</button>
-    <span class="started-badge" id="started-badge">&#10003; Context locked &#8212; game in progress</span>
-  </div>
-
-  <div id="chat-log">
-    <div class="welcome">Click <strong>&#9654; Start Game</strong> above to begin your adventure.</div>
-  </div>
-
-  <form id="game-form" onsubmit="sendTurn(event)">
-    <div class="input-row">
-      <select id="model-select"><option value="mistral">mistral</option></select>
-      <span class="meta" id="routed-meta"></span>
-    </div>
-    <textarea id="prompt" placeholder="What do you do?" disabled></textarea>
-    <div class="input-row" style="margin-top:4px">
-      <button type="submit" class="btn-send" id="submit-btn" disabled>Send</button>
-      <button type="button" class="btn-reset" onclick="resetGame()">&#128260; Reset Game</button>
-    </div>
-  </form>
 </main>
-<script>
-var _history = [];
-var gameStarted = false;
 
+<!-- ══ CHARACTER CREATOR ══ -->
+<main id="view-create" class="view-main" style="display:none">
+  <div class="cc-hdr">
+    <button class="cc-back" onclick="backToSelect()">&#8592; Back</button>
+    <span class="cc-title" id="cc-genre-lbl">Create Your Character</span>
+  </div>
+  <div class="cc-grid">
+    <div class="cc-box">
+      <div class="cc-lbl">Gender</div>
+      <div class="radio-group">
+        <label class="radio-label"><input type="radio" name="gender" value="male" checked onchange="onGenderChange()"> Male</label>
+        <label class="radio-label"><input type="radio" name="gender" value="female" onchange="onGenderChange()"> Female</label>
+      </div>
+    </div>
+    <div class="cc-box">
+      <div class="cc-lbl">Name</div>
+      <input type="text" id="char-name" class="cc-input" placeholder="Your character&#8217;s name&#8230;">
+    </div>
+    <div class="cc-box cc-full">
+      <div class="cc-lbl" id="subtype-lbl">Class</div>
+      <div class="radio-group" id="subtype-opts"></div>
+    </div>
+    <div class="cc-box cc-full">
+      <div class="cc-lbl">Stats</div>
+      <div id="stat-block"><p class="stat-ph">Click &#8220;Roll Character&#8221; to generate stats.</p></div>
+    </div>
+  </div>
+  <div class="cc-actions">
+    <button class="btn-roll" onclick="rollCharacter()">&#127922; Roll Character</button>
+    <button class="btn-start" id="start-game-btn" onclick="startGame()" disabled>&#9654; Start Game</button>
+  </div>
+  <details>
+    <summary>&#9881; Game Context</summary>
+    <textarea id="game-context" class="ctx-ta" spellcheck="false"></textarea>
+    <div class="ctx-btns">
+      <button class="btn-ctx" onclick="savePromptDefault()">&#128190; Save as Default</button>
+      <button class="btn-ctx" onclick="resetPromptDefault()">&#8635; Reset to Default</button>
+      <span id="ctx-st" class="ctx-st"></span>
+    </div>
+  </details>
+</main>
+
+<!-- ══ GAMEPLAY ══ -->
+<main id="view-play" class="view-main" style="display:none">
+  <details class="cs-panel">
+    <summary>&#128203; Character Sheet &#8212; <span id="cs-name"></span></summary>
+    <div class="cs-inner" id="cs-inner"></div>
+  </details>
+  <div class="save-toolbar">
+    <button class="btn-qs" id="qs-btn" onclick="quickSave()" disabled>&#9889; Quicksave</button>
+    <button class="btn-sv" onclick="toggleSaveForm()">&#128190; Save</button>
+    <button class="btn-sv" onclick="toggleLoadPanel()">&#128194; Load</button>
+    <span id="sv-st" class="sv-st"></span>
+  </div>
+  <div id="sv-form" class="sv-form" style="display:none">
+    <input type="text" id="sv-name-inp" class="sv-inp" placeholder="Save name&#8230;">
+    <button class="btn-sv" onclick="confirmSave()">Save</button>
+    <button class="btn-sv-x" onclick="hideSaveForm()">Cancel</button>
+  </div>
+  <div id="load-panel" class="load-panel" style="display:none">
+    <div id="load-list"></div>
+  </div>
+  <div id="chat-log"></div>
+  <div class="input-row">
+    <select id="model-select"><option value="mistral">mistral</option></select>
+  </div>
+  <textarea id="prompt" placeholder="What do you do?" disabled></textarea>
+  <div class="input-row" style="margin-top:8px">
+    <button class="btn-send" id="submit-btn" disabled onclick="sendTurn(event)">Send</button>
+    <button class="btn-reset" onclick="resetGame()">&#128260; Reset Game</button>
+  </div>
+</main>
+
+<script>
+var GAME_DATA = {{ game_data | tojson }};
+
+var STAT_NAMES = {
+  fantasy:['Strength','Stamina','Charisma','Magic','Agility','Luck'],
+  scifi:  ['Intelligence','Tech Skill','Agility','Charisma','Endurance','Luck'],
+  action: ['Strength','Stamina','Charisma','Cunning','Agility','Luck']
+};
+var SUBTYPES = {
+  fantasy:{lbl:'Class',byG:true, opts:{male:['Warrior','Elf Archer','Wizard','Thief'],female:['Valkyrie','Elf Archer','Wizard','Thief']}},
+  scifi:  {lbl:'Scenario',byG:false,opts:['AI','Aliens','Space Travel','Time Travel']},
+  action: {lbl:'Era',byG:false,opts:['Egyptian Pharaoh Era','Roman Empire','Renaissance','American Wild West','World War II']}
+};
+
+var _genre=null,_rolledStats=null,_character=null;
+var _history=[],_gameStarted=false,_currentSaveId=null,_turnCount=0;
+
+// ── View management ──────────────────────────────────────────
+function showView(v){
+  ['view-select','view-create','view-play'].forEach(function(id){
+    document.getElementById(id).style.display=(id===v)?'block':'none';
+  });
+  adjustPadding();
+}
+function adjustPadding(){
+  var h=document.getElementById('site-hdr').offsetHeight;
+  document.querySelectorAll('.view-main').forEach(function(el){el.style.paddingTop=(h+14)+'px';});
+}
+
+// ── Genre selection ──────────────────────────────────────────
+function selectGenre(g){
+  _genre=g;
+  var lbl={fantasy:'Fantasy Adventure',scifi:'Science Fiction',action:'Action / Adventure'};
+  document.getElementById('cc-genre-lbl').textContent=lbl[g]||g;
+  renderSubtypeOpts();
+  document.getElementById('stat-block').innerHTML='<p class="stat-ph">Click “Roll Character” to generate stats.</p>';
+  document.getElementById('start-game-btn').disabled=true;
+  document.getElementById('game-context').value='';
+  _rolledStats=null;
+  loadSavedPrompt();
+  showView('view-create');
+}
+function backToSelect(){_genre=null;showView('view-select');}
+
+// ── Character creator ────────────────────────────────────────
+function getGender(){var el=document.querySelector('input[name="gender"]:checked');return el?el.value:'male';}
+function onGenderChange(){if(_genre==='fantasy')renderSubtypeOpts();}
+function getSubtype(){var el=document.querySelector('input[name="subtype"]:checked');return el?el.value:'';}
+
+function renderSubtypeOpts(){
+  var st=SUBTYPES[_genre];
+  var opts=st.byG?st.opts[getGender()]:st.opts;
+  document.getElementById('subtype-lbl').textContent=st.lbl;
+  document.getElementById('subtype-opts').innerHTML=opts.map(function(o,i){
+    return '<label class="radio-label"><input type="radio" name="subtype" value="'+o+'"'+(i===0?' checked':'')+'>'+o+'</label>';
+  }).join('');
+}
+
+function roll4d6(){var d=[0,0,0,0].map(function(){return Math.floor(Math.random()*6)+1;});d.sort(function(a,b){return a-b;});return d[1]+d[2]+d[3];}
+function statBar(v){var f=Math.min(8,Math.max(0,Math.round((v-3)/15*8)));return '\\u2588'.repeat(f)+'\\u2591'.repeat(8-f);}
+
+function rollCharacter(){
+  var names=STAT_NAMES[_genre];
+  _rolledStats={};
+  names.forEach(function(n){_rolledStats[n]=roll4d6();});
+  document.getElementById('stat-block').innerHTML=Object.keys(_rolledStats).map(function(n){
+    return '<div class="stat-row"><span class="stat-name">'+n+'</span><span class="stat-bar">'+statBar(_rolledStats[n])+'</span><span class="stat-val">&nbsp;'+_rolledStats[n]+'</span></div>';
+  }).join('');
+  var ctx=document.getElementById('game-context').value.trim();
+  if(!ctx)document.getElementById('game-context').value=buildContext();
+  document.getElementById('start-game-btn').disabled=false;
+}
+
+// ── Prompt persistence ───────────────────────────────────────
+function loadSavedPrompt(){
+  fetch('/api/game/prompts/'+_genre).then(function(r){return r.json();}).then(function(d){
+    if(d.prompt)document.getElementById('game-context').value=d.prompt;
+  }).catch(function(){});
+}
+function savePromptDefault(){
+  var ctx=document.getElementById('game-context').value.trim();
+  if(!ctx){alert('Roll character first to generate a context.');return;}
+  fetch('/api/game/prompts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({genre:_genre,prompt:ctx})})
+    .then(function(){showCtxStatus('\\u2713 Saved as default');}).catch(function(){showCtxStatus('Save failed');});
+}
+function resetPromptDefault(){
+  fetch('/api/game/prompts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({genre:_genre,prompt:null})})
+    .then(function(){document.getElementById('game-context').value=_rolledStats?buildContext():'';showCtxStatus('Reset to default');}).catch(function(){});
+}
+function showCtxStatus(m){var e=document.getElementById('ctx-st');e.textContent=m;setTimeout(function(){e.textContent='';},2500);}
+
+// ── Context generation ───────────────────────────────────────
+function sbLines(){
+  return Object.keys(_rolledStats).map(function(n){
+    return (n+'              ').slice(0,14)+statBar(_rolledStats[n])+' '+_rolledStats[n];
+  }).join('\\n');
+}
+function buildContext(){
+  var name=document.getElementById('char-name').value.trim()||'the adventurer';
+  var gender=getGender();var sub=getSubtype();
+  var pr=gender==='male'?'He':'She';
+  var sb=sbLines();var ls=GAME_DATA.levelSystem;
+  var ch='CHARACTER\\nName:   '+name+'\\nGender: '+gender+'\\n';
+  if(_genre==='fantasy'){
+    ch+='Class:  '+sub+'\\n';
+    return 'You are a dynamic, adaptive text-adventure game engine set in a classic fantasy world.\\nNever break character or explain your mechanics.\\n\\n'+ch+'\\nSTAT BLOCK\\n'+sb+'\\n\\n'+ls
+      +'\\n\\n### 4. GENRE MECHANICS\\nSpells, potions, enchanted items. MAGIC governs spell power; STRENGTH melee; AGILITY stealth. Track inventory (max 6 items). Medieval fantasy — no modern technology.\\n\\n'
+      +'### 5. OPENING MOVE\\nBegin at Level 1. '+name+' ('+sub+') wakes '+GAME_DATA.openings.fantasy+'.';
+  }
+  if(_genre==='scifi'){
+    ch+='Scenario: '+sub+'\\n';
+    var op=GAME_DATA.openings.scifi[sub]||'waking in an unfamiliar technological environment';
+    return 'You are a dynamic, adaptive text-adventure game engine set in a science fiction universe.\\nNever break character or explain your mechanics.\\n\\n'+ch+'\\nSTAT BLOCK\\n'+sb+'\\n\\n'+ls
+      +'\\n\\n### 4. GENRE MECHANICS\\nTechnology, science, gadgets. INTELLIGENCE governs problem-solving; TECH SKILL device operation. Track equipment (max 6). No magic — plausible science only.\\n\\n'
+      +'### 5. OPENING MOVE\\nBegin at Level 1. '+name+' ('+sub+' scenario): '+pr+' is '+op+'.';
+  }
+  ch+='Era:    '+sub+'\\n';
+  var op=GAME_DATA.openings.action[sub]||'finding themselves at the heart of a historical moment';
+  return 'You are a dynamic, adaptive text-adventure game engine set in a historical action-adventure world.\\nNever break character or explain your mechanics.\\n\\n'+ch+'\\nSTAT BLOCK\\n'+sb+'\\n\\n'+ls
+    +'\\n\\n### 4. GENRE MECHANICS\\nCombat, diplomacy, survival. All items and language MUST be era-accurate for "'+sub+'". STRENGTH governs physical; CUNNING strategy/deception; CHARISMA social. Track equipment (max 6). PG-13 only.\\n\\n'
+    +'### 5. OPENING MOVE\\nBegin at Level 1. '+name+' in the '+sub+' era: '+pr+' is '+op+'.';
+}
+
+// ── Game start ───────────────────────────────────────────────
+async function startGame(){
+  if(!_rolledStats){alert('Roll your character first.');return;}
+  var name=document.getElementById('char-name').value.trim()||'the adventurer';
+  _character={genre:_genre,name:name,gender:getGender(),subtype:getSubtype(),stats:_rolledStats};
+  var ctx=document.getElementById('game-context').value.trim()||buildContext();
+  renderCharSheet();
+  showView('view-play');
+  _history=[{role:'system',content:ctx},{role:'user',content:'Begin the adventure.'}];
+  var log=document.getElementById('chat-log');log.innerHTML='';
+  document.getElementById('prompt').disabled=true;
+  document.getElementById('submit-btn').disabled=true;
+  document.getElementById('qs-btn').disabled=true;
+  _turnCount=0;_currentSaveId=null;_gameStarted=false;
+  try{
+    var resp=await gameFetch(_history,document.getElementById('model-select').value);
+    _history.push({role:'assistant',content:resp});appendMsg('assistant',resp);
+    _gameStarted=true;
+    document.getElementById('prompt').disabled=false;
+    document.getElementById('submit-btn').disabled=false;
+    document.getElementById('qs-btn').disabled=false;
+    document.getElementById('prompt').focus();
+  }catch(err){appendMsg('error','Failed to start: '+err.message);}
+}
+
+function renderCharSheet(){
+  document.getElementById('cs-name').textContent=_character.name+' · '+_character.subtype;
+  document.getElementById('cs-inner').innerHTML=Object.keys(_character.stats).map(function(n){
+    return '<div class="stat-row"><span class="stat-name">'+n+'</span><span class="stat-bar">'+statBar(_character.stats[n])+'</span><span class="stat-val">&nbsp;'+_character.stats[n]+'</span></div>';
+  }).join('');
+}
+
+// ── Chat ─────────────────────────────────────────────────────
+async function sendTurn(e){
+  if(e&&e.preventDefault)e.preventDefault();
+  if(!_gameStarted)return;
+  var prompt=document.getElementById('prompt').value.trim();if(!prompt)return;
+  var btn=document.getElementById('submit-btn'),model=document.getElementById('model-select').value;
+  _history.push({role:'user',content:prompt});appendMsg('user',prompt);
+  document.getElementById('prompt').value='';btn.disabled=true;btn.textContent='...';
+  try{
+    var resp=await gameFetch(_history,model);
+    _history.push({role:'assistant',content:resp});appendMsg('assistant',resp);
+    _turnCount++;if(_turnCount%5===0)autoSave();
+  }catch(err){_history.pop();appendMsg('error','Request failed: '+err.message);}
+  finally{btn.disabled=false;btn.textContent='Send';}
+}
+async function gameFetch(msgs,model){
+  var r=await fetch('/api/game/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:msgs,model:model})});
+  var d=await r.json();if(d.error&&!d.response)throw new Error(d.error);
+  return d.response||d.error||JSON.stringify(d);
+}
+function appendMsg(role,content){
+  var log=document.getElementById('chat-log');
+  var div=document.createElement('div');div.className='msg '+role;
+  if(role==='assistant'){div.innerHTML=marked.parse(content,{breaks:true,gfm:true});}
+  else{div.textContent=content;}
+  log.appendChild(div);
+  requestAnimationFrame(function(){log.scrollTop=log.scrollHeight;});
+}
+function resetGame(){
+  _history=[];_gameStarted=false;_character=null;_rolledStats=null;_genre=null;_currentSaveId=null;_turnCount=0;
+  document.getElementById('prompt').disabled=true;document.getElementById('submit-btn').disabled=true;
+  document.getElementById('prompt').value='';document.getElementById('chat-log').innerHTML='';
+  hideSaveForm();hideLoadPanel();showView('view-select');
+}
+
+// ── Save / Load ──────────────────────────────────────────────
+function toggleSaveForm(){
+  var f=document.getElementById('sv-form');
+  if(f.style.display==='none'||!f.style.display){f.style.display='flex';document.getElementById('sv-name-inp').focus();}
+  else hideSaveForm();
+}
+function hideSaveForm(){document.getElementById('sv-form').style.display='none';}
+async function confirmSave(){
+  var name=document.getElementById('sv-name-inp').value.trim();if(!name){alert('Enter a save name.');return;}
+  await saveGame(name,null);hideSaveForm();document.getElementById('sv-name-inp').value='';
+}
+async function saveGame(name,id){
+  if(!_character)return;
+  var pay={save_name:name,genre:_character.genre,subtype:_character.subtype,char_name:_character.name,gender:_character.gender,stats:_character.stats,history:_history};
+  try{
+    var url=id?'/api/game/saves/'+id:'/api/game/saves',method=id?'PUT':'POST';
+    var r=await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(pay)});
+    var d=await r.json();if(d.save_id)_currentSaveId=d.save_id;
+    setSvStatus('\\u2713 Saved: '+name);
+  }catch(err){setSvStatus('Save failed');}
+}
+async function quickSave(){
+  if(!_character)return;
+  await saveGame('Quicksave — '+_character.name,_currentSaveId||null);
+}
+async function autoSave(){
+  if(!_character)return;
+  var pay={save_name:'Autosave',genre:_character.genre,subtype:_character.subtype,char_name:_character.name,gender:_character.gender,stats:_character.stats,history:_history,autosave:true};
+  try{await fetch('/api/game/saves/autosave-'+_character.genre,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(pay)});}catch(e){}
+}
+function setSvStatus(m){var e=document.getElementById('sv-st');e.textContent=m;setTimeout(function(){e.textContent='';},3000);}
+
+function toggleLoadPanel(){
+  var p=document.getElementById('load-panel');
+  if(p.style.display==='none'||!p.style.display){refreshSaveList();p.style.display='block';}
+  else hideLoadPanel();
+}
+function hideLoadPanel(){document.getElementById('load-panel').style.display='none';}
+async function refreshSaveList(){
+  var list=document.getElementById('load-list');list.innerHTML='<div class="load-empty">Loading&#8230;</div>';
+  try{
+    var saves=await fetch('/api/game/saves').then(function(r){return r.json();});
+    if(!saves.length){list.innerHTML='<div class="load-empty">No saves found.</div>';return;}
+    list.innerHTML=saves.map(function(s){
+      var dt=s.updated_at?(s.updated_at.slice(0,16).replace('T',' ')):'';
+      return '<div class="load-item">'
+        +'<div class="load-item-info" onclick="loadGame(\''+s.save_id+'\')">'
+        +'<span class="li-name">'+s.save_name+'</span>'
+        +'<span class="li-meta">'+s.genre+' · '+s.char_name+' · '+dt+'</span>'
+        +'</div>'
+        +'<button class="btn-del" onclick="deleteGame(\''+s.save_id+'\')">&#128465;</button>'
+        +'</div>';
+    }).join('');
+  }catch(e){list.innerHTML='<div class="load-empty">Failed to load saves.</div>';}
+}
+async function loadGame(id){
+  try{
+    var s=await fetch('/api/game/saves/'+id).then(function(r){return r.json();});
+    _character={genre:s.genre,name:s.char_name,gender:s.gender,subtype:s.subtype,stats:s.stats};
+    _history=s.history||[];_currentSaveId=id;_turnCount=0;_gameStarted=true;
+    renderCharSheet();showView('view-play');hideLoadPanel();
+    var log=document.getElementById('chat-log');log.innerHTML='';
+    var last=_history.filter(function(m){return m.role==='assistant';});
+    if(last.length)appendMsg('assistant',last[last.length-1].content);
+    document.getElementById('prompt').disabled=false;
+    document.getElementById('submit-btn').disabled=false;
+    document.getElementById('qs-btn').disabled=false;
+    setSvStatus('\\u2713 Loaded: '+s.save_name);
+  }catch(err){alert('Load failed: '+err.message);}
+}
+async function deleteGame(id){
+  if(!confirm('Delete this save?'))return;
+  try{await fetch('/api/game/saves/'+id,{method:'DELETE'});refreshSaveList();}
+  catch(err){alert('Delete failed: '+err.message);}
+}
+
+// ── Models / Node info / GPU (unchanged) ─────────────────────
 (function loadModels(){
   fetch('/api/models').then(function(r){return r.json();}).then(function(d){
     var sel=document.getElementById('model-select');
     if(d.models&&d.models.length){
       sel.innerHTML='';
-      d.models.forEach(function(m){
-        var o=document.createElement('option');
-        o.value=m;o.textContent=m;
-        sel.appendChild(o);
-      });
-      var pref=d.models.indexOf('gemma4:e4b')>=0?'gemma4:e4b':d.models[0];
-      sel.value=pref;
+      d.models.forEach(function(m){var o=document.createElement('option');o.value=m;o.textContent=m;sel.appendChild(o);});
+      var pref=d.models.indexOf('gemma4:e4b')>=0?'gemma4:e4b':d.models[0];sel.value=pref;
     }
   }).catch(function(){});
 })();
-
 (function loadNodeInfo(){
   fetch('/api/status',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){
     document.getElementById('node-info').textContent=(d.node_id||'')+'  ·  v'+(d.version||'');
-  }).catch(function(){
-    document.getElementById('node-info').textContent='status unavailable';
-  });
+  }).catch(function(){document.getElementById('node-info').textContent='status unavailable';});
 })();
-
-function toggleCtx(){
-  var body=document.getElementById('ctx-body');
-  var arrow=document.getElementById('ctx-arrow');
-  var open=body.classList.toggle('open');
-  arrow.innerHTML=open?'&#9660;':'&#9658;';
-}
-
-async function startGame(){
-  var ctx=document.getElementById('game-context').value.trim();
-  if(!ctx)return;
-  var btn=document.getElementById('start-btn');
-  btn.disabled=true;btn.textContent='...';
-
-  _history=[
-    {role:'system',content:ctx},
-    {role:'user',content:'Begin the adventure.'}
-  ];
-
-  var model=document.getElementById('model-select').value;
-  var log=document.getElementById('chat-log');
-  log.innerHTML='';
-
-  document.getElementById('game-context').readOnly=true;
-  document.getElementById('started-badge').style.display='inline';
-
-  try{
-    var resp=await gameFetch(_history,model);
-    _history.push({role:'assistant',content:resp});
-    appendMsg('assistant',resp);
-    gameStarted=true;
-    document.getElementById('prompt').disabled=false;
-    document.getElementById('submit-btn').disabled=false;
-    document.getElementById('prompt').focus();
-    btn.textContent='\\u2713 Started';
-  }catch(err){
-    log.innerHTML='';
-    appendMsg('error','Failed to start: '+err.message);
-    document.getElementById('game-context').readOnly=false;
-    document.getElementById('started-badge').style.display='none';
-    btn.disabled=false;btn.textContent='\\u25ba Start Game';
-  }
-}
-
-async function sendTurn(e){
-  e.preventDefault();
-  if(!gameStarted)return;
-  var prompt=document.getElementById('prompt').value.trim();
-  if(!prompt)return;
-  var btn=document.getElementById('submit-btn');
-  var model=document.getElementById('model-select').value;
-
-  _history.push({role:'user',content:prompt});
-  appendMsg('user',prompt);
-  document.getElementById('prompt').value='';
-  btn.disabled=true;btn.textContent='...';
-
-  try{
-    var resp=await gameFetch(_history,model);
-    _history.push({role:'assistant',content:resp});
-    appendMsg('assistant',resp);
-  }catch(err){
-    _history.pop();
-    appendMsg('error','Request failed: '+err.message);
-  }finally{
-    btn.disabled=false;btn.textContent='Send';
-    document.getElementById('chat-log').scrollTop=document.getElementById('chat-log').scrollHeight;
-  }
-}
-
-async function gameFetch(msgs,model){
-  var r=await fetch('/api/game/chat',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({messages:msgs,model:model})
-  });
-  var d=await r.json();
-  if(d.error&&!d.response)throw new Error(d.error);
-  return d.response||d.error||JSON.stringify(d);
-}
-
-function appendMsg(role,content){
-  var log=document.getElementById('chat-log');
-  var div=document.createElement('div');
-  div.className='msg '+role;
-  if(role==='assistant'){
-    div.innerHTML=marked.parse(content,{breaks:true,gfm:true});
-  }else{
-    div.textContent=content;
-  }
-  log.appendChild(div);
-  requestAnimationFrame(function(){log.scrollTop=log.scrollHeight;});
-}
-
-function resetGame(){
-  _history=[];
-  gameStarted=false;
-  var log=document.getElementById('chat-log');
-  log.innerHTML='<div class="welcome">Expand <strong>&#9881; Game Context</strong> above and click <strong>&#9654; Start Game</strong> to begin your adventure.</div>';
-  document.getElementById('game-context').readOnly=false;
-  document.getElementById('started-badge').style.display='none';
-  var btn=document.getElementById('start-btn');
-  btn.disabled=false;btn.innerHTML='&#9654; Start Game';
-  document.getElementById('prompt').disabled=true;
-  document.getElementById('submit-btn').disabled=true;
-  document.getElementById('prompt').value='';
-  document.getElementById('routed-meta').textContent='';
-}
-document.getElementById('prompt').addEventListener('keydown',function(e){
-  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(gameStarted)sendTurn(e);}
-});
 (function(){
-  var GPU_NODES=[
-    {id:'node1',label:'node1 · RTX 3070',url:'/api/gpu'}
-  ];
-  var container=document.getElementById('gpu-gauges');
-  if(!container)return;
+  var GPU_NODES=[{id:'node1',label:'node1 · RTX 3070',url:'/api/gpu'}];
+  var container=document.getElementById('gpu-gauges');if(!container)return;
   GPU_NODES.forEach(function(n){
-    var c=document.createElement('div');
-    c.className='gpu-card';c.id='gpu-card-'+n.id;
-    c.innerHTML='<div class="gpu-card-label">'+n.label+'</div>'
-      +'<div class="gpu-bar-row">'
-      +'<div class="gpu-bar-track"><div class="gpu-bar-fill" id="gpu-bar-'+n.id+'" style="width:0"></div></div>'
-      +'<span class="gpu-card-stats" id="gpu-stats-'+n.id+'">—</span>'
-      +'</div>';
+    var c=document.createElement('div');c.className='gpu-card';c.id='gpu-card-'+n.id;
+    c.innerHTML='<div class="gpu-card-label">'+n.label+'</div><div class="gpu-bar-row"><div class="gpu-bar-track"><div class="gpu-bar-fill" id="gpu-bar-'+n.id+'" style="width:0"></div></div><span class="gpu-card-stats" id="gpu-stats-'+n.id+'">—</span></div>';
     container.appendChild(c);
   });
   function pollNode(n){
     fetch(n.url).then(function(r){return r.json();}).then(function(d){
       if(d.error)return;
-      var bar=document.getElementById('gpu-bar-'+n.id);
-      var stats=document.getElementById('gpu-stats-'+n.id);
-      var card=document.getElementById('gpu-card-'+n.id);
-      var pct=d.vram_total_mb>0?d.vram_used_mb/d.vram_total_mb*100:0;
-      var active=d.gpu_util_pct>20;
-      bar.style.width=pct.toFixed(1)+'%';
-      bar.className='gpu-bar-fill'+(active?' active':'');
+      var bar=document.getElementById('gpu-bar-'+n.id),stats=document.getElementById('gpu-stats-'+n.id),card=document.getElementById('gpu-card-'+n.id);
+      var pct=d.vram_total_mb>0?d.vram_used_mb/d.vram_total_mb*100:0,active=d.gpu_util_pct>20;
+      bar.style.width=pct.toFixed(1)+'%';bar.className='gpu-bar-fill'+(active?' active':'');
       card.className='gpu-card'+(active?' active':'');
-      var used=(d.vram_used_mb/1024).toFixed(1);
-      var total=(d.vram_total_mb/1024).toFixed(1);
-      stats.textContent=used+'/'+total+' GB · '+d.gpu_util_pct+'% · '+d.temp_c+'°C';
+      stats.textContent=(d.vram_used_mb/1024).toFixed(1)+'/'+(d.vram_total_mb/1024).toFixed(1)+' GB · '+d.gpu_util_pct+'% · '+d.temp_c+'°C';
     }).catch(function(){});
   }
-  function poll(){GPU_NODES.forEach(pollNode);}
-  poll();
-  setInterval(poll,3000);
+  function poll(){GPU_NODES.forEach(pollNode);}poll();setInterval(poll,3000);
 })();
+document.getElementById('prompt').addEventListener('keydown',function(e){
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(_gameStarted)sendTurn(e);}
+});
+window.addEventListener('load',adjustPadding);
+window.addEventListener('resize',adjustPadding);
 </script>
 </body>
 </html>"""
@@ -900,7 +1164,11 @@ def ui():
 
 @app.route("/game")
 def game():
-    return render_template_string(_GAME_HTML, game_context=GAME_CONTEXT)
+    game_data = {
+        "levelSystem": _GAME_LEVEL_SYSTEM,
+        "openings": _GAME_OPENINGS,
+    }
+    return render_template_string(_GAME_HTML, game_data=game_data)
 
 
 @app.route("/api/models")
@@ -976,6 +1244,130 @@ def api_game_chat():
         import traceback
         print(f"[game/chat] unhandled exception:\n{traceback.format_exc()}")
         return jsonify({"error": str(e)}), 500
+
+
+# ── Game prompt persistence ───────────────────────────────────
+
+_PROMPTS_FILE = os.path.join(os.path.expanduser("~"), "vernex", "config", "game_prompts.json")
+_SAVES_DIR = os.path.join(os.path.expanduser("~"), "vernex", "config", "game_saves")
+
+
+def _load_prompts():
+    try:
+        with open(_PROMPTS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_prompts(data):
+    os.makedirs(os.path.dirname(_PROMPTS_FILE), exist_ok=True)
+    with open(_PROMPTS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+@app.route("/api/game/prompts/<genre>")
+def api_game_prompts_get(genre):
+    prompts = _load_prompts()
+    return jsonify({"genre": genre, "prompt": prompts.get(genre)})
+
+
+@app.route("/api/game/prompts", methods=["POST"])
+def api_game_prompts_save():
+    body = request.get_json(force=True) or {}
+    genre = body.get("genre", "").strip()
+    prompt = body.get("prompt")
+    if not genre:
+        return jsonify({"error": "genre required"}), 400
+    prompts = _load_prompts()
+    if prompt is None:
+        prompts.pop(genre, None)
+    else:
+        prompts[genre] = prompt
+    _save_prompts(prompts)
+    return jsonify({"ok": True})
+
+
+# ── Game save / load ──────────────────────────────────────────
+
+import uuid as _uuid
+from datetime import datetime as _dt
+
+
+def _save_path(save_id):
+    os.makedirs(_SAVES_DIR, exist_ok=True)
+    return os.path.join(_SAVES_DIR, f"{save_id}.json")
+
+
+@app.route("/api/game/saves")
+def api_game_saves_list():
+    os.makedirs(_SAVES_DIR, exist_ok=True)
+    saves = []
+    for fname in sorted(os.listdir(_SAVES_DIR), key=lambda f: os.path.getmtime(os.path.join(_SAVES_DIR, f)), reverse=True):
+        if not fname.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(_SAVES_DIR, fname)) as f:
+                s = json.load(f)
+            saves.append({
+                "save_id": s.get("save_id", fname[:-5]),
+                "save_name": s.get("save_name", ""),
+                "genre": s.get("genre", ""),
+                "char_name": s.get("char_name", ""),
+                "updated_at": s.get("updated_at", ""),
+            })
+        except Exception:
+            pass
+    return jsonify(saves)
+
+
+@app.route("/api/game/saves", methods=["POST"])
+def api_game_saves_create():
+    body = request.get_json(force=True) or {}
+    save_id = body.get("save_id") or str(_uuid.uuid4())[:8]
+    now = _dt.utcnow().isoformat()
+    record = dict(body)
+    record["save_id"] = save_id
+    record.setdefault("created_at", now)
+    record["updated_at"] = now
+    with open(_save_path(save_id), "w") as f:
+        json.dump(record, f, indent=2)
+    return jsonify({"save_id": save_id})
+
+
+@app.route("/api/game/saves/<save_id>")
+def api_game_saves_get(save_id):
+    path = _save_path(save_id)
+    if not os.path.exists(path):
+        return jsonify({"error": "not found"}), 404
+    with open(path) as f:
+        return jsonify(json.load(f))
+
+
+@app.route("/api/game/saves/<save_id>", methods=["PUT"])
+def api_game_saves_update(save_id):
+    body = request.get_json(force=True) or {}
+    now = _dt.utcnow().isoformat()
+    path = _save_path(save_id)
+    existing = {}
+    if os.path.exists(path):
+        with open(path) as f:
+            existing = json.load(f)
+    existing.update(body)
+    existing["save_id"] = save_id
+    existing["updated_at"] = now
+    existing.setdefault("created_at", now)
+    with open(path, "w") as f:
+        json.dump(existing, f, indent=2)
+    return jsonify({"save_id": save_id})
+
+
+@app.route("/api/game/saves/<save_id>", methods=["DELETE"])
+def api_game_saves_delete(save_id):
+    path = _save_path(save_id)
+    if os.path.exists(path):
+        os.remove(path)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/status")
