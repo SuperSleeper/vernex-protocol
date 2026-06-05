@@ -2,6 +2,7 @@ from flask import Flask, render_template_string, jsonify, request, send_from_dir
 import requests
 import json
 import os
+import subprocess
 import threading
 import time
 
@@ -439,13 +440,23 @@ textarea{resize:vertical;min-height:80px}
 button{background:#e94560;color:#fff;border:none;border-radius:6px;padding:10px 28px;font-size:.9rem;cursor:pointer}
 button:disabled{opacity:.5;cursor:not-allowed}
 .meta{font-size:.7rem;color:#8892a4}
+.gpu-gauges{display:flex;gap:8px;align-items:center}
+.gpu-card{background:#0d1117;border:1px solid #21262d;border-radius:5px;padding:4px 9px;font-size:.65rem;display:flex;flex-direction:column;gap:3px;min-width:166px;transition:border-color .3s}
+.gpu-card.active{border-color:#3fb950}
+.gpu-card-label{color:#6e7681;letter-spacing:.04em;white-space:nowrap}
+.gpu-bar-row{display:flex;align-items:center;gap:5px}
+.gpu-bar-track{background:#161b22;border-radius:2px;height:5px;width:60px;overflow:hidden;flex-shrink:0}
+.gpu-bar-fill{height:100%;border-radius:2px;background:#1f6feb;transition:width .5s,background .3s}
+.gpu-bar-fill.active{background:#3fb950}
+.gpu-card-stats{color:#8892a4;white-space:nowrap}
 </style>
 </head>
 <body>
 <header>
   <h1>VERNEX</h1>
   <span class="node-info" id="node-info">loading…</span>
-  <div style="margin-left:auto;display:flex;gap:12px;align-items:center">
+  <div style="margin-left:auto;display:flex;gap:16px;align-items:center">
+    <div id="gpu-gauges" class="gpu-gauges"></div>
     <a href="/game" style="font-size:.75rem;color:#d29922;text-decoration:none;border:1px solid #2a1f00;padding:3px 9px;border-radius:4px;">🎮 Game</a>
     <a class="logout" href="/auth/logout">logout</a>
   </div>
@@ -519,6 +530,42 @@ document.getElementById('chat-form').addEventListener('submit',async e=>{
 document.getElementById('prompt').addEventListener('keydown',function(e){
   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.getElementById('chat-form').requestSubmit();}
 });
+(function(){
+  var GPU_NODES=[
+    {id:'node1',label:'node1 · RTX 3070',url:'/api/gpu'}
+  ];
+  var container=document.getElementById('gpu-gauges');
+  if(!container)return;
+  GPU_NODES.forEach(function(n){
+    var c=document.createElement('div');
+    c.className='gpu-card';c.id='gpu-card-'+n.id;
+    c.innerHTML='<div class="gpu-card-label">'+n.label+'</div>'
+      +'<div class="gpu-bar-row">'
+      +'<div class="gpu-bar-track"><div class="gpu-bar-fill" id="gpu-bar-'+n.id+'" style="width:0"></div></div>'
+      +'<span class="gpu-card-stats" id="gpu-stats-'+n.id+'">—</span>'
+      +'</div>';
+    container.appendChild(c);
+  });
+  function pollNode(n){
+    fetch(n.url).then(function(r){return r.json();}).then(function(d){
+      if(d.error)return;
+      var bar=document.getElementById('gpu-bar-'+n.id);
+      var stats=document.getElementById('gpu-stats-'+n.id);
+      var card=document.getElementById('gpu-card-'+n.id);
+      var pct=d.vram_total_mb>0?d.vram_used_mb/d.vram_total_mb*100:0;
+      var active=d.gpu_util_pct>20;
+      bar.style.width=pct.toFixed(1)+'%';
+      bar.className='gpu-bar-fill'+(active?' active':'');
+      card.className='gpu-card'+(active?' active':'');
+      var used=(d.vram_used_mb/1024).toFixed(1);
+      var total=(d.vram_total_mb/1024).toFixed(1);
+      stats.textContent=used+'/'+total+' GB · '+d.gpu_util_pct+'% · '+d.temp_c+'°C';
+    }).catch(function(){});
+  }
+  function poll(){GPU_NODES.forEach(pollNode);}
+  poll();
+  setInterval(poll,3000);
+})();
 </script>
 </body>
 </html>"""
@@ -613,6 +660,15 @@ textarea#prompt:disabled{opacity:.45;cursor:not-allowed}
 .btn-reset{background:transparent;color:#8892a4;border:1px solid #30363d;border-radius:6px;padding:10px 14px;font-size:.85rem;cursor:pointer}
 .btn-reset:hover{border-color:#e94560;color:#e94560}
 .meta{font-size:.7rem;color:#8892a4}
+.gpu-gauges{display:flex;gap:8px;align-items:center}
+.gpu-card{background:#0d1117;border:1px solid #21262d;border-radius:5px;padding:4px 9px;font-size:.65rem;display:flex;flex-direction:column;gap:3px;min-width:166px;transition:border-color .3s}
+.gpu-card.active{border-color:#3fb950}
+.gpu-card-label{color:#6e7681;letter-spacing:.04em;white-space:nowrap}
+.gpu-bar-row{display:flex;align-items:center;gap:5px}
+.gpu-bar-track{background:#161b22;border-radius:2px;height:5px;width:60px;overflow:hidden;flex-shrink:0}
+.gpu-bar-fill{height:100%;border-radius:2px;background:#1f6feb;transition:width .5s,background .3s}
+.gpu-bar-fill.active{background:#3fb950}
+.gpu-card-stats{color:#8892a4;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -621,6 +677,7 @@ textarea#prompt:disabled{opacity:.45;cursor:not-allowed}
   <span class="hdr-sub">&#127918; TEXT ADVENTURE</span>
   <span class="node-info" id="node-info">loading&#8230;</span>
   <div class="hdr-links">
+    <div id="gpu-gauges" class="gpu-gauges"></div>
     <a class="hdr-link" href="/ui">&#8592; Chat</a>
     <a class="hdr-link" href="/auth/logout">logout</a>
   </div>
@@ -795,6 +852,42 @@ function resetGame(){
 document.getElementById('prompt').addEventListener('keydown',function(e){
   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(gameStarted)sendTurn(e);}
 });
+(function(){
+  var GPU_NODES=[
+    {id:'node1',label:'node1 · RTX 3070',url:'/api/gpu'}
+  ];
+  var container=document.getElementById('gpu-gauges');
+  if(!container)return;
+  GPU_NODES.forEach(function(n){
+    var c=document.createElement('div');
+    c.className='gpu-card';c.id='gpu-card-'+n.id;
+    c.innerHTML='<div class="gpu-card-label">'+n.label+'</div>'
+      +'<div class="gpu-bar-row">'
+      +'<div class="gpu-bar-track"><div class="gpu-bar-fill" id="gpu-bar-'+n.id+'" style="width:0"></div></div>'
+      +'<span class="gpu-card-stats" id="gpu-stats-'+n.id+'">—</span>'
+      +'</div>';
+    container.appendChild(c);
+  });
+  function pollNode(n){
+    fetch(n.url).then(function(r){return r.json();}).then(function(d){
+      if(d.error)return;
+      var bar=document.getElementById('gpu-bar-'+n.id);
+      var stats=document.getElementById('gpu-stats-'+n.id);
+      var card=document.getElementById('gpu-card-'+n.id);
+      var pct=d.vram_total_mb>0?d.vram_used_mb/d.vram_total_mb*100:0;
+      var active=d.gpu_util_pct>20;
+      bar.style.width=pct.toFixed(1)+'%';
+      bar.className='gpu-bar-fill'+(active?' active':'');
+      card.className='gpu-card'+(active?' active':'');
+      var used=(d.vram_used_mb/1024).toFixed(1);
+      var total=(d.vram_total_mb/1024).toFixed(1);
+      stats.textContent=used+'/'+total+' GB · '+d.gpu_util_pct+'% · '+d.temp_c+'°C';
+    }).catch(function(){});
+  }
+  function poll(){GPU_NODES.forEach(pollNode);}
+  poll();
+  setInterval(poll,3000);
+})();
 </script>
 </body>
 </html>"""
@@ -818,6 +911,32 @@ def api_models():
         return jsonify({"models": models})
     except Exception as e:
         return jsonify({"models": ["mistral", "llama3.1"], "error": str(e)})
+
+
+@app.route("/api/gpu")
+def api_gpu():
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.used,memory.total,utilization.gpu,temperature.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return jsonify({"error": "unavailable"}), 503
+        parts = [p.strip() for p in result.stdout.strip().split(",")]
+        return jsonify({
+            "node_id": "VRX-54b89a1684e21ae4",
+            "gpu_name": parts[0],
+            "vram_used_mb": int(parts[1]),
+            "vram_total_mb": int(parts[2]),
+            "gpu_util_pct": int(parts[3]),
+            "temp_c": int(parts[4]),
+        })
+    except Exception:
+        return jsonify({"error": "unavailable"}), 503
 
 
 @app.route("/api/game/chat", methods=["POST"])
