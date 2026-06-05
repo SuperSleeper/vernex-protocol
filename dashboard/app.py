@@ -548,10 +548,10 @@ document.getElementById('prompt').addEventListener('keydown',function(e){
   });
   function pollNode(n){
     fetch(n.url).then(function(r){return r.json();}).then(function(d){
-      if(d.error)return;
       var bar=document.getElementById('gpu-bar-'+n.id);
       var stats=document.getElementById('gpu-stats-'+n.id);
       var card=document.getElementById('gpu-card-'+n.id);
+      if(d.error){if(stats)stats.textContent='unavailable';if(card)card.className='gpu-card';return;}
       var pct=d.vram_total_mb>0?d.vram_used_mb/d.vram_total_mb*100:0;
       var active=d.gpu_util_pct>20;
       bar.style.width=pct.toFixed(1)+'%';
@@ -559,8 +559,8 @@ document.getElementById('prompt').addEventListener('keydown',function(e){
       card.className='gpu-card'+(active?' active':'');
       var used=(d.vram_used_mb/1024).toFixed(1);
       var total=(d.vram_total_mb/1024).toFixed(1);
-      stats.textContent=used+'/'+total+' GB · '+d.gpu_util_pct+'% · '+d.temp_c+'°C';
-    }).catch(function(){});
+      stats.textContent=used+'/'+total+' GB · '+d.gpu_util_pct+'% · '+d.temp_c+'°C';
+    }).catch(function(){var s=document.getElementById('gpu-stats-'+n.id);if(s)s.textContent='unavailable';});
   }
   function poll(){GPU_NODES.forEach(pollNode);}
   poll();
@@ -775,15 +775,15 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
 <!-- ══ CHARACTER CREATOR ══ -->
 <main id="view-create" class="view-main" style="display:none">
   <div class="cc-hdr">
-    <button class="cc-back" onclick="backToSelect()">&#8592; Back</button>
+    <button class="cc-back" id="cc-back-btn">&#8592; Back</button>
     <span class="cc-title" id="cc-genre-lbl">Create Your Character</span>
   </div>
   <div class="cc-grid">
     <div class="cc-box">
       <div class="cc-lbl">Gender</div>
       <div class="radio-group">
-        <label class="radio-label"><input type="radio" name="gender" value="male" checked onchange="onGenderChange()"> Male</label>
-        <label class="radio-label"><input type="radio" name="gender" value="female" onchange="onGenderChange()"> Female</label>
+        <label class="radio-label"><input type="radio" name="gender" value="male" checked> Male</label>
+        <label class="radio-label"><input type="radio" name="gender" value="female"> Female</label>
       </div>
     </div>
     <div class="cc-box">
@@ -800,15 +800,15 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
     </div>
   </div>
   <div class="cc-actions">
-    <button class="btn-roll" onclick="rollCharacter()">&#127922; Roll Character</button>
-    <button class="btn-start" id="start-game-btn" onclick="startGame()" disabled>&#9654; Start Game</button>
+    <button class="btn-roll" id="roll-btn">&#127922; Roll Character</button>
+    <button class="btn-start" id="start-game-btn" disabled>&#9654; Start Game</button>
   </div>
   <details>
     <summary>&#9881; Game Context</summary>
     <textarea id="game-context" class="ctx-ta" spellcheck="false"></textarea>
     <div class="ctx-btns">
-      <button class="btn-ctx" onclick="savePromptDefault()">&#128190; Save as Default</button>
-      <button class="btn-ctx" onclick="resetPromptDefault()">&#8635; Reset to Default</button>
+      <button class="btn-ctx" id="ctx-save-btn">&#128190; Save as Default</button>
+      <button class="btn-ctx" id="ctx-reset-btn">&#8635; Reset to Default</button>
       <span id="ctx-st" class="ctx-st"></span>
     </div>
   </details>
@@ -821,15 +821,15 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
     <div class="cs-inner" id="cs-inner"></div>
   </details>
   <div class="save-toolbar">
-    <button class="btn-qs" id="qs-btn" onclick="quickSave()" disabled>&#9889; Quicksave</button>
-    <button class="btn-sv" onclick="toggleSaveForm()">&#128190; Save</button>
-    <button class="btn-sv" onclick="toggleLoadPanel()">&#128194; Load</button>
+    <button class="btn-qs" id="qs-btn" disabled>&#9889; Quicksave</button>
+    <button class="btn-sv" id="sv-save-btn">&#128190; Save</button>
+    <button class="btn-sv" id="sv-load-btn">&#128194; Load</button>
     <span id="sv-st" class="sv-st"></span>
   </div>
   <div id="sv-form" class="sv-form" style="display:none">
     <input type="text" id="sv-name-inp" class="sv-inp" placeholder="Save name&#8230;">
-    <button class="btn-sv" onclick="confirmSave()">Save</button>
-    <button class="btn-sv-x" onclick="hideSaveForm()">Cancel</button>
+    <button class="btn-sv" id="sv-confirm-btn">Save</button>
+    <button class="btn-sv-x" id="sv-cancel-btn">Cancel</button>
   </div>
   <div id="load-panel" class="load-panel" style="display:none">
     <div id="load-list"></div>
@@ -840,322 +840,12 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
   </div>
   <textarea id="prompt" placeholder="What do you do?" disabled></textarea>
   <div class="input-row" style="margin-top:8px">
-    <button class="btn-send" id="submit-btn" disabled onclick="sendTurn(event)">Send</button>
-    <button class="btn-reset" onclick="resetGame()">&#128260; Reset Game</button>
+    <button class="btn-send" id="submit-btn" disabled>Send</button>
+    <button class="btn-reset" id="reset-game-btn">&#128260; Reset Game</button>
   </div>
 </main>
 
-<script>
-var GAME_DATA = {{ game_data | tojson }};
-
-var STAT_NAMES = {
-  fantasy:['Strength','Stamina','Charisma','Magic','Agility','Luck'],
-  scifi:  ['Intelligence','Tech Skill','Agility','Charisma','Endurance','Luck'],
-  action: ['Strength','Stamina','Charisma','Cunning','Agility','Luck']
-};
-var SUBTYPES = {
-  fantasy:{lbl:'Class',byG:true, opts:{male:['Warrior','Elf Archer','Wizard','Thief'],female:['Valkyrie','Elf Archer','Wizard','Thief']}},
-  scifi:  {lbl:'Scenario',byG:false,opts:['AI','Aliens','Space Travel','Time Travel']},
-  action: {lbl:'Era',byG:false,opts:['Egyptian Pharaoh Era','Roman Empire','Renaissance','American Wild West','World War II']}
-};
-
-var _genre=null,_rolledStats=null,_character=null;
-var _history=[],_gameStarted=false,_currentSaveId=null,_turnCount=0;
-
-// ── View management ──────────────────────────────────────────
-function showView(v){
-  ['view-select','view-create','view-play'].forEach(function(id){
-    document.getElementById(id).style.display=(id===v)?'block':'none';
-  });
-  adjustPadding();
-}
-function adjustPadding(){
-  var h=document.getElementById('site-hdr').offsetHeight;
-  document.querySelectorAll('.view-main').forEach(function(el){el.style.paddingTop=(h+14)+'px';});
-}
-
-// ── Genre selection ──────────────────────────────────────────
-function selectGenre(g){
-  _genre=g;
-  var lbl={fantasy:'Fantasy Adventure',scifi:'Science Fiction',action:'Action / Adventure'};
-  document.getElementById('cc-genre-lbl').textContent=lbl[g]||g;
-  renderSubtypeOpts();
-  document.getElementById('stat-block').innerHTML='<p class="stat-ph">Click “Roll Character” to generate stats.</p>';
-  document.getElementById('start-game-btn').disabled=true;
-  document.getElementById('game-context').value='';
-  _rolledStats=null;
-  loadSavedPrompt();
-  showView('view-create');
-}
-function backToSelect(){_genre=null;showView('view-select');}
-
-// ── Character creator ────────────────────────────────────────
-function getGender(){var el=document.querySelector('input[name="gender"]:checked');return el?el.value:'male';}
-function onGenderChange(){if(_genre==='fantasy')renderSubtypeOpts();}
-function getSubtype(){var el=document.querySelector('input[name="subtype"]:checked');return el?el.value:'';}
-
-function renderSubtypeOpts(){
-  var st=SUBTYPES[_genre];
-  var opts=st.byG?st.opts[getGender()]:st.opts;
-  document.getElementById('subtype-lbl').textContent=st.lbl;
-  document.getElementById('subtype-opts').innerHTML=opts.map(function(o,i){
-    return '<label class="radio-label"><input type="radio" name="subtype" value="'+o+'"'+(i===0?' checked':'')+'>'+o+'</label>';
-  }).join('');
-}
-
-function roll4d6(){var d=[0,0,0,0].map(function(){return Math.floor(Math.random()*6)+1;});d.sort(function(a,b){return a-b;});return d[1]+d[2]+d[3];}
-function statBar(v){var f=Math.min(8,Math.max(0,Math.round((v-3)/15*8)));return '\\u2588'.repeat(f)+'\\u2591'.repeat(8-f);}
-
-function rollCharacter(){
-  var names=STAT_NAMES[_genre];
-  _rolledStats={};
-  names.forEach(function(n){_rolledStats[n]=roll4d6();});
-  document.getElementById('stat-block').innerHTML=Object.keys(_rolledStats).map(function(n){
-    return '<div class="stat-row"><span class="stat-name">'+n+'</span><span class="stat-bar">'+statBar(_rolledStats[n])+'</span><span class="stat-val">&nbsp;'+_rolledStats[n]+'</span></div>';
-  }).join('');
-  var ctx=document.getElementById('game-context').value.trim();
-  if(!ctx)document.getElementById('game-context').value=buildContext();
-  document.getElementById('start-game-btn').disabled=false;
-}
-
-// ── Prompt persistence ───────────────────────────────────────
-function loadSavedPrompt(){
-  fetch('/api/game/prompts/'+_genre).then(function(r){return r.json();}).then(function(d){
-    if(d.prompt)document.getElementById('game-context').value=d.prompt;
-  }).catch(function(){});
-}
-function savePromptDefault(){
-  var ctx=document.getElementById('game-context').value.trim();
-  if(!ctx){alert('Roll character first to generate a context.');return;}
-  fetch('/api/game/prompts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({genre:_genre,prompt:ctx})})
-    .then(function(){showCtxStatus('\\u2713 Saved as default');}).catch(function(){showCtxStatus('Save failed');});
-}
-function resetPromptDefault(){
-  fetch('/api/game/prompts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({genre:_genre,prompt:null})})
-    .then(function(){document.getElementById('game-context').value=_rolledStats?buildContext():'';showCtxStatus('Reset to default');}).catch(function(){});
-}
-function showCtxStatus(m){var e=document.getElementById('ctx-st');e.textContent=m;setTimeout(function(){e.textContent='';},2500);}
-
-// ── Context generation ───────────────────────────────────────
-function sbLines(){
-  return Object.keys(_rolledStats).map(function(n){
-    return (n+'              ').slice(0,14)+statBar(_rolledStats[n])+' '+_rolledStats[n];
-  }).join('\\n');
-}
-function buildContext(){
-  var name=document.getElementById('char-name').value.trim()||'the adventurer';
-  var gender=getGender();var sub=getSubtype();
-  var pr=gender==='male'?'He':'She';
-  var sb=sbLines();var ls=GAME_DATA.levelSystem;
-  var ch='CHARACTER\\nName:   '+name+'\\nGender: '+gender+'\\n';
-  if(_genre==='fantasy'){
-    ch+='Class:  '+sub+'\\n';
-    return 'You are a dynamic, adaptive text-adventure game engine set in a classic fantasy world.\\nNever break character or explain your mechanics.\\n\\n'+ch+'\\nSTAT BLOCK\\n'+sb+'\\n\\n'+ls
-      +'\\n\\n### 4. GENRE MECHANICS\\nSpells, potions, enchanted items. MAGIC governs spell power; STRENGTH melee; AGILITY stealth. Track inventory (max 6 items). Medieval fantasy — no modern technology.\\n\\n'
-      +'### 5. OPENING MOVE\\nBegin at Level 1. '+name+' ('+sub+') wakes '+GAME_DATA.openings.fantasy+'.';
-  }
-  if(_genre==='scifi'){
-    ch+='Scenario: '+sub+'\\n';
-    var op=GAME_DATA.openings.scifi[sub]||'waking in an unfamiliar technological environment';
-    return 'You are a dynamic, adaptive text-adventure game engine set in a science fiction universe.\\nNever break character or explain your mechanics.\\n\\n'+ch+'\\nSTAT BLOCK\\n'+sb+'\\n\\n'+ls
-      +'\\n\\n### 4. GENRE MECHANICS\\nTechnology, science, gadgets. INTELLIGENCE governs problem-solving; TECH SKILL device operation. Track equipment (max 6). No magic — plausible science only.\\n\\n'
-      +'### 5. OPENING MOVE\\nBegin at Level 1. '+name+' ('+sub+' scenario): '+pr+' is '+op+'.';
-  }
-  ch+='Era:    '+sub+'\\n';
-  var op=GAME_DATA.openings.action[sub]||'finding themselves at the heart of a historical moment';
-  return 'You are a dynamic, adaptive text-adventure game engine set in a historical action-adventure world.\\nNever break character or explain your mechanics.\\n\\n'+ch+'\\nSTAT BLOCK\\n'+sb+'\\n\\n'+ls
-    +'\\n\\n### 4. GENRE MECHANICS\\nCombat, diplomacy, survival. All items and language MUST be era-accurate for "'+sub+'". STRENGTH governs physical; CUNNING strategy/deception; CHARISMA social. Track equipment (max 6). PG-13 only.\\n\\n'
-    +'### 5. OPENING MOVE\\nBegin at Level 1. '+name+' in the '+sub+' era: '+pr+' is '+op+'.';
-}
-
-// ── Game start ───────────────────────────────────────────────
-async function startGame(){
-  if(!_rolledStats){alert('Roll your character first.');return;}
-  var name=document.getElementById('char-name').value.trim()||'the adventurer';
-  _character={genre:_genre,name:name,gender:getGender(),subtype:getSubtype(),stats:_rolledStats};
-  var ctx=document.getElementById('game-context').value.trim()||buildContext();
-  renderCharSheet();
-  showView('view-play');
-  _history=[{role:'system',content:ctx},{role:'user',content:'Begin the adventure.'}];
-  var log=document.getElementById('chat-log');log.innerHTML='';
-  document.getElementById('prompt').disabled=true;
-  document.getElementById('submit-btn').disabled=true;
-  document.getElementById('qs-btn').disabled=true;
-  _turnCount=0;_currentSaveId=null;_gameStarted=false;
-  try{
-    var resp=await gameFetch(_history,document.getElementById('model-select').value);
-    _history.push({role:'assistant',content:resp});appendMsg('assistant',resp);
-    _gameStarted=true;
-    document.getElementById('prompt').disabled=false;
-    document.getElementById('submit-btn').disabled=false;
-    document.getElementById('qs-btn').disabled=false;
-    document.getElementById('prompt').focus();
-  }catch(err){appendMsg('error','Failed to start: '+err.message);}
-}
-
-function renderCharSheet(){
-  document.getElementById('cs-name').textContent=_character.name+' · '+_character.subtype;
-  document.getElementById('cs-inner').innerHTML=Object.keys(_character.stats).map(function(n){
-    return '<div class="stat-row"><span class="stat-name">'+n+'</span><span class="stat-bar">'+statBar(_character.stats[n])+'</span><span class="stat-val">&nbsp;'+_character.stats[n]+'</span></div>';
-  }).join('');
-}
-
-// ── Chat ─────────────────────────────────────────────────────
-async function sendTurn(e){
-  if(e&&e.preventDefault)e.preventDefault();
-  if(!_gameStarted)return;
-  var prompt=document.getElementById('prompt').value.trim();if(!prompt)return;
-  var btn=document.getElementById('submit-btn'),model=document.getElementById('model-select').value;
-  _history.push({role:'user',content:prompt});appendMsg('user',prompt);
-  document.getElementById('prompt').value='';btn.disabled=true;btn.textContent='...';
-  try{
-    var resp=await gameFetch(_history,model);
-    _history.push({role:'assistant',content:resp});appendMsg('assistant',resp);
-    _turnCount++;if(_turnCount%5===0)autoSave();
-  }catch(err){_history.pop();appendMsg('error','Request failed: '+err.message);}
-  finally{btn.disabled=false;btn.textContent='Send';}
-}
-async function gameFetch(msgs,model){
-  var r=await fetch('/api/game/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:msgs,model:model})});
-  var d=await r.json();if(d.error&&!d.response)throw new Error(d.error);
-  return d.response||d.error||JSON.stringify(d);
-}
-function appendMsg(role,content){
-  var log=document.getElementById('chat-log');
-  var div=document.createElement('div');div.className='msg '+role;
-  if(role==='assistant'){div.innerHTML=marked.parse(content,{breaks:true,gfm:true});}
-  else{div.textContent=content;}
-  log.appendChild(div);
-  requestAnimationFrame(function(){log.scrollTop=log.scrollHeight;});
-}
-function resetGame(){
-  _history=[];_gameStarted=false;_character=null;_rolledStats=null;_genre=null;_currentSaveId=null;_turnCount=0;
-  document.getElementById('prompt').disabled=true;document.getElementById('submit-btn').disabled=true;
-  document.getElementById('prompt').value='';document.getElementById('chat-log').innerHTML='';
-  hideSaveForm();hideLoadPanel();showView('view-select');
-}
-
-// ── Save / Load ──────────────────────────────────────────────
-function toggleSaveForm(){
-  var f=document.getElementById('sv-form');
-  if(f.style.display==='none'||!f.style.display){f.style.display='flex';document.getElementById('sv-name-inp').focus();}
-  else hideSaveForm();
-}
-function hideSaveForm(){document.getElementById('sv-form').style.display='none';}
-async function confirmSave(){
-  var name=document.getElementById('sv-name-inp').value.trim();if(!name){alert('Enter a save name.');return;}
-  await saveGame(name,null);hideSaveForm();document.getElementById('sv-name-inp').value='';
-}
-async function saveGame(name,id){
-  if(!_character)return;
-  var pay={save_name:name,genre:_character.genre,subtype:_character.subtype,char_name:_character.name,gender:_character.gender,stats:_character.stats,history:_history};
-  try{
-    var url=id?'/api/game/saves/'+id:'/api/game/saves',method=id?'PUT':'POST';
-    var r=await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(pay)});
-    var d=await r.json();if(d.save_id)_currentSaveId=d.save_id;
-    setSvStatus('\\u2713 Saved: '+name);
-  }catch(err){setSvStatus('Save failed');}
-}
-async function quickSave(){
-  if(!_character)return;
-  await saveGame('Quicksave — '+_character.name,_currentSaveId||null);
-}
-async function autoSave(){
-  if(!_character)return;
-  var pay={save_name:'Autosave',genre:_character.genre,subtype:_character.subtype,char_name:_character.name,gender:_character.gender,stats:_character.stats,history:_history,autosave:true};
-  try{await fetch('/api/game/saves/autosave-'+_character.genre,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(pay)});}catch(e){}
-}
-function setSvStatus(m){var e=document.getElementById('sv-st');e.textContent=m;setTimeout(function(){e.textContent='';},3000);}
-
-function toggleLoadPanel(){
-  var p=document.getElementById('load-panel');
-  if(p.style.display==='none'||!p.style.display){refreshSaveList();p.style.display='block';}
-  else hideLoadPanel();
-}
-function hideLoadPanel(){document.getElementById('load-panel').style.display='none';}
-async function refreshSaveList(){
-  var list=document.getElementById('load-list');list.innerHTML='<div class="load-empty">Loading&#8230;</div>';
-  try{
-    var saves=await fetch('/api/game/saves').then(function(r){return r.json();});
-    if(!saves.length){list.innerHTML='<div class="load-empty">No saves found.</div>';return;}
-    list.innerHTML=saves.map(function(s){
-      var dt=s.updated_at?(s.updated_at.slice(0,16).replace('T',' ')):'';
-      return '<div class="load-item">'
-        +'<div class="load-item-info" onclick="loadGame(\''+s.save_id+'\')">'
-        +'<span class="li-name">'+s.save_name+'</span>'
-        +'<span class="li-meta">'+s.genre+' · '+s.char_name+' · '+dt+'</span>'
-        +'</div>'
-        +'<button class="btn-del" onclick="deleteGame(\''+s.save_id+'\')">&#128465;</button>'
-        +'</div>';
-    }).join('');
-  }catch(e){list.innerHTML='<div class="load-empty">Failed to load saves.</div>';}
-}
-async function loadGame(id){
-  try{
-    var s=await fetch('/api/game/saves/'+id).then(function(r){return r.json();});
-    _character={genre:s.genre,name:s.char_name,gender:s.gender,subtype:s.subtype,stats:s.stats};
-    _history=s.history||[];_currentSaveId=id;_turnCount=0;_gameStarted=true;
-    renderCharSheet();showView('view-play');hideLoadPanel();
-    var log=document.getElementById('chat-log');log.innerHTML='';
-    var last=_history.filter(function(m){return m.role==='assistant';});
-    if(last.length)appendMsg('assistant',last[last.length-1].content);
-    document.getElementById('prompt').disabled=false;
-    document.getElementById('submit-btn').disabled=false;
-    document.getElementById('qs-btn').disabled=false;
-    setSvStatus('\\u2713 Loaded: '+s.save_name);
-  }catch(err){alert('Load failed: '+err.message);}
-}
-async function deleteGame(id){
-  if(!confirm('Delete this save?'))return;
-  try{await fetch('/api/game/saves/'+id,{method:'DELETE'});refreshSaveList();}
-  catch(err){alert('Delete failed: '+err.message);}
-}
-
-// ── Models / Node info / GPU (unchanged) ─────────────────────
-(function loadModels(){
-  fetch('/api/models').then(function(r){return r.json();}).then(function(d){
-    var sel=document.getElementById('model-select');
-    if(d.models&&d.models.length){
-      sel.innerHTML='';
-      d.models.forEach(function(m){var o=document.createElement('option');o.value=m;o.textContent=m;sel.appendChild(o);});
-      var pref=d.models.indexOf('gemma4:e4b')>=0?'gemma4:e4b':d.models[0];sel.value=pref;
-    }
-  }).catch(function(){});
-})();
-(function loadNodeInfo(){
-  fetch('/api/status',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){
-    document.getElementById('node-info').textContent=(d.node_id||'')+'  ·  v'+(d.version||'');
-  }).catch(function(){document.getElementById('node-info').textContent='status unavailable';});
-})();
-(function(){
-  var GPU_NODES=[{id:'node1',label:'node1 · RTX 3070',url:'/api/gpu'}];
-  var container=document.getElementById('gpu-gauges');if(!container)return;
-  GPU_NODES.forEach(function(n){
-    var c=document.createElement('div');c.className='gpu-card';c.id='gpu-card-'+n.id;
-    c.innerHTML='<div class="gpu-card-label">'+n.label+'</div><div class="gpu-bar-row"><div class="gpu-bar-track"><div class="gpu-bar-fill" id="gpu-bar-'+n.id+'" style="width:0"></div></div><span class="gpu-card-stats" id="gpu-stats-'+n.id+'">—</span></div>';
-    container.appendChild(c);
-  });
-  function pollNode(n){
-    fetch(n.url).then(function(r){return r.json();}).then(function(d){
-      if(d.error)return;
-      var bar=document.getElementById('gpu-bar-'+n.id),stats=document.getElementById('gpu-stats-'+n.id),card=document.getElementById('gpu-card-'+n.id);
-      var pct=d.vram_total_mb>0?d.vram_used_mb/d.vram_total_mb*100:0,active=d.gpu_util_pct>20;
-      bar.style.width=pct.toFixed(1)+'%';bar.className='gpu-bar-fill'+(active?' active':'');
-      card.className='gpu-card'+(active?' active':'');
-      stats.textContent=(d.vram_used_mb/1024).toFixed(1)+'/'+(d.vram_total_mb/1024).toFixed(1)+' GB · '+d.gpu_util_pct+'% · '+d.temp_c+'°C';
-    }).catch(function(){});
-  }
-  function poll(){GPU_NODES.forEach(pollNode);}poll();setInterval(poll,3000);
-})();
-document.getElementById('prompt').addEventListener('keydown',function(e){
-  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(_gameStarted)sendTurn(e);}
-});
-document.querySelectorAll('.genre-card[data-genre]').forEach(function(card){
-  card.addEventListener('click',function(){selectGenre(card.getAttribute('data-genre'));});
-});
-adjustPadding();
-window.addEventListener('resize',adjustPadding);
-</script>
+<script src="/static/game.js"></script>
 </body>
 </html>"""
 
@@ -1167,11 +857,15 @@ def ui():
 
 @app.route("/game")
 def game():
-    game_data = {
+    return render_template_string(_GAME_HTML)
+
+
+@app.route("/api/game/contexts")
+def api_game_contexts():
+    return jsonify({
         "levelSystem": _GAME_LEVEL_SYSTEM,
         "openings": _GAME_OPENINGS,
-    }
-    return render_template_string(_GAME_HTML, game_data=game_data)
+    })
 
 
 @app.route("/api/models")
