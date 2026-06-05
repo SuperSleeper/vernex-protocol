@@ -757,15 +757,15 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
   <p class="sel-title">Choose Your Adventure</p>
   <p class="sel-sub">Select a genre to begin</p>
   <div class="genre-grid">
-    <div class="genre-card gc-fantasy" onclick="selectGenre('fantasy')">
+    <div class="genre-card gc-fantasy" data-genre="fantasy">
       <span class="gc-icon">&#129497;</span>
       <span class="gc-name">Fantasy</span>
     </div>
-    <div class="genre-card gc-scifi" onclick="selectGenre('scifi')">
+    <div class="genre-card gc-scifi" data-genre="scifi">
       <span class="gc-icon">&#128640;</span>
       <span class="gc-name">Science Fiction</span>
     </div>
-    <div class="genre-card gc-action" onclick="selectGenre('action')">
+    <div class="genre-card gc-action" data-genre="action">
       <span class="gc-icon">&#9876;&#65039;</span>
       <span class="gc-name">Action / Adventure</span>
     </div>
@@ -1150,7 +1150,10 @@ async function deleteGame(id){
 document.getElementById('prompt').addEventListener('keydown',function(e){
   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(_gameStarted)sendTurn(e);}
 });
-window.addEventListener('load',adjustPadding);
+document.querySelectorAll('.genre-card[data-genre]').forEach(function(card){
+  card.addEventListener('click',function(){selectGenre(card.getAttribute('data-genre'));});
+});
+adjustPadding();
 window.addEventListener('resize',adjustPadding);
 </script>
 </body>
