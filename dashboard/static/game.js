@@ -117,6 +117,9 @@ function adjustPadding() {
   document.querySelectorAll('.view-main').forEach(function(el) {
     el.style.paddingTop = (h + 14) + 'px';
   });
+  // Pin view-play to viewport height so #chat-log flex:1 has a concrete size to fill
+  var vp = document.getElementById('view-play');
+  if (vp) vp.style.height = window.innerHeight + 'px';
 }
 
 // ── Genre selection ───────────────────────────────────────────
@@ -816,6 +819,8 @@ async function startCombat(enemyName) {
       _playerMaxHealth = d.player_max_health;
       updateHealthBar();
       renderCombatPanel();
+      var _log0 = document.getElementById('chat-log');
+      if (_log0) requestAnimationFrame(function() { _log0.scrollTop = _log0.scrollHeight; });
       appendSystemMsg('⚔️ **Combat started!** ' + d.enemy.name
         + ' — HP: ' + d.enemy.health + '  DEF: ' + d.enemy.defense + '  MGR: ' + d.enemy.magic_resist);
     }
