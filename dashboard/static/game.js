@@ -474,7 +474,7 @@ function renderSelSaves(container, saves) {
   container.innerHTML = saves.map(function(s) {
     var dt   = s.updated_at ? s.updated_at.slice(0, 16).replace('T', ' ') : '';
     var meta = [s.genre, s.char_name, s.subtype, dt].filter(Boolean).join(' · ');
-    return '<div class="sel-save-item" data-load-id="' + escHtml(s.save_id) + '">'
+    return '<div class="sel-save-item" data-save-id="' + escHtml(s.save_id) + '">'
       + '<div class="sel-save-info">'
       + '<div class="sel-save-name">' + escHtml(s.save_name) + '</div>'
       + '<div class="sel-save-meta">' + escHtml(meta) + '</div>'
@@ -497,6 +497,20 @@ async function loadSelectionSaves() {
     if (regularEl) regularEl.innerHTML = '<div class="sel-empty">Failed to load saves.</div>';
     if (autoEl)    autoEl.innerHTML    = '<div class="sel-empty">—</div>';
   }
+}
+
+// ── User identity ─────────────────────────────────────────────
+function loadUserInfo() {
+  fetch('/api/me', {credentials: 'include'})
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(d) {
+      if (!d || !d.email) return;
+      var hdrEl = document.getElementById('hdr-user');
+      if (hdrEl) hdrEl.textContent = d.email;
+      var selEl = document.getElementById('sel-user-line');
+      if (selEl) selEl.textContent = 'Playing as: ' + d.email;
+    })
+    .catch(function() {});
 }
 
 // ── Models ────────────────────────────────────────────────────
@@ -615,20 +629,21 @@ function initGpuGauges() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (_gameStarted) sendTurn(e); }
   });
 
-  // Selection screen save click handlers (event delegation)
+  // Selection screen save click handlers (event delegation on static containers)
   ['sel-saves-list','sel-autosaves-list'].forEach(function(listId) {
     var el = document.getElementById(listId);
     if (el) {
       el.addEventListener('click', function(e) {
-        var item = e.target.closest('[data-load-id]');
-        if (item) loadGame(item.getAttribute('data-load-id'));
+        var item = e.target.closest('[data-save-id]');
+        if (item) loadGame(item.getAttribute('data-save-id'));
       });
     }
   });
 
-  // Models, node info, GPU, selection saves
+  // Models, node info, GPU, user identity, selection saves
   loadModels();
   loadNodeInfo();
+  loadUserInfo();
   initGpuGauges();
   loadSelectionSaves();
 

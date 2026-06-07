@@ -2,6 +2,7 @@ from flask import Flask, render_template_string, jsonify, request, send_from_dir
 import requests
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -48,6 +49,40 @@ def get_nodes() -> dict:
         _peers_cache = nodes
         _peers_last_fetch = now
         return dict(nodes)
+
+def _get_daemon_version(fallback: str = "v0.12.29") -> str:
+    try:
+        r = requests.get(f"{LOCAL_URL}/status", timeout=2, verify=False)
+        v = r.json().get("version", "")
+        if v:
+            return "v" + v
+    except Exception:
+        pass
+    return fallback
+
+
+def _get_current_user() -> str:
+    """Return the logged-in user's email by forwarding the session cookie to the OAuth server."""
+    try:
+        cookie = request.cookies.get("_vsession", "")
+        if not cookie:
+            return "guest"
+        r = requests.get(
+            "http://127.0.0.1:5002/api/me",
+            headers={"Cookie": f"_vsession={cookie}"},
+            timeout=1,
+        )
+        if r.status_code == 200:
+            return r.json().get("email", "") or "guest"
+    except Exception:
+        pass
+    return "guest"
+
+
+def _user_id(email: str) -> str:
+    """Sanitize email for use as a directory/file name component."""
+    return re.sub(r"[@.]", "_", email) or "guest"
+
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -454,9 +489,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
 <body>
 <header>
   <h1>VERNEX</h1>
-  <span class="node-info" id="node-info">loading…</span>
+  <span class="node-info" id="node-info">{{ version }}</span>
   <div style="margin-left:auto;display:flex;gap:16px;align-items:center">
     <div id="gpu-gauges" class="gpu-gauges"></div>
+    <span id="hdr-user" style="font-size:.72rem;color:#8892a4"></span>
     <a href="/game" style="font-size:.75rem;color:#d29922;text-decoration:none;border:1px solid #2a1f00;padding:3px 9px;border-radius:4px;">🎮 Game</a>
     <a class="logout" href="/auth/logout">logout</a>
   </div>
@@ -492,6 +528,12 @@ button:disabled{opacity:.5;cursor:not-allowed}
     const d=await r.json();
     document.getElementById('node-info').textContent=(d.node_id||'')+'  ·  v'+(d.version||'');
   }catch(e){document.getElementById('node-info').textContent='status unavailable';}
+})();
+(async()=>{
+  try{
+    const r=await fetch('/api/me',{credentials:'include'});
+    if(r.ok){const d=await r.json();const el=document.getElementById('hdr-user');if(el&&d.email)el.textContent=d.email;}
+  }catch(e){}
 })();
 document.getElementById('chat-form').addEventListener('submit',async e=>{
   e.preventDefault();
@@ -760,9 +802,10 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
 <header id="site-hdr">
   <h1>VERNEX</h1>
   <span class="hdr-sub">&#127918; TEXT ADVENTURE</span>
-  <span class="node-info" id="node-info">loading&#8230;</span>
+  <span class="node-info" id="node-info">{{ version }}</span>
   <div class="hdr-links">
     <div id="gpu-gauges" class="gpu-gauges"></div>
+    <span id="hdr-user" style="font-size:.72rem;color:#8892a4"></span>
     <a class="hdr-link" href="/ui">&#8592; Chat</a>
     <a class="hdr-link" href="/auth/logout">logout</a>
   </div>
@@ -772,6 +815,7 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
 <main id="view-select" class="view-main">
   <p class="sel-title">Choose Your Adventure</p>
   <p class="sel-sub">Select a genre to begin</p>
+  <p id="sel-user-line" style="text-align:center;color:#8892a4;font-size:.78rem;margin-top:4px;margin-bottom:0"></p>
   <div class="genre-grid">
     <div class="genre-card gc-fantasy" data-genre="fantasy">
       <span class="gc-icon">&#129497;</span>
@@ -879,12 +923,12 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
 
 @app.route("/ui")
 def ui():
-    return render_template_string(_CHAT_HTML)
+    return render_template_string(_CHAT_HTML, version=_get_daemon_version())
 
 
 @app.route("/game")
 def game():
-    return render_template_string(_GAME_HTML)
+    return render_template_string(_GAME_HTML, version=_get_daemon_version())
 
 
 @app.route("/api/game/contexts")
@@ -972,43 +1016,53 @@ def api_game_chat():
 
 # ── Game prompt persistence ───────────────────────────────────
 
-_PROMPTS_FILE = os.path.join(os.path.expanduser("~"), "vernex", "config", "game_prompts.json")
-_SAVES_DIR = os.path.join(os.path.expanduser("~"), "vernex", "config", "game_saves")
+_CONFIG_BASE = os.path.join(os.path.expanduser("~"), "vernex", "config")
 
 
-def _load_prompts():
+def _saves_dir(user_id: str = "guest") -> str:
+    return os.path.join(_CONFIG_BASE, "game_saves", user_id)
+
+
+def _prompts_file(user_id: str = "guest") -> str:
+    return os.path.join(_CONFIG_BASE, "game_prompts", f"{user_id}.json")
+
+
+def _load_prompts(user_id: str = "guest") -> dict:
     try:
-        with open(_PROMPTS_FILE) as f:
+        with open(_prompts_file(user_id)) as f:
             return json.load(f)
     except Exception:
         return {}
 
 
-def _save_prompts(data):
-    os.makedirs(os.path.dirname(_PROMPTS_FILE), exist_ok=True)
-    with open(_PROMPTS_FILE, "w") as f:
+def _save_prompts(data: dict, user_id: str = "guest"):
+    pf = _prompts_file(user_id)
+    os.makedirs(os.path.dirname(pf), exist_ok=True)
+    with open(pf, "w") as f:
         json.dump(data, f, indent=2)
 
 
 @app.route("/api/game/prompts/<genre>")
 def api_game_prompts_get(genre):
-    prompts = _load_prompts()
+    uid = _user_id(_get_current_user())
+    prompts = _load_prompts(uid)
     return jsonify({"genre": genre, "prompt": prompts.get(genre)})
 
 
 @app.route("/api/game/prompts", methods=["POST"])
 def api_game_prompts_save():
+    uid = _user_id(_get_current_user())
     body = request.get_json(force=True) or {}
     genre = body.get("genre", "").strip()
     prompt = body.get("prompt")
     if not genre:
         return jsonify({"error": "genre required"}), 400
-    prompts = _load_prompts()
+    prompts = _load_prompts(uid)
     if prompt is None:
         prompts.pop(genre, None)
     else:
         prompts[genre] = prompt
-    _save_prompts(prompts)
+    _save_prompts(prompts, uid)
     return jsonify({"ok": True})
 
 
@@ -1018,20 +1072,23 @@ import uuid as _uuid
 from datetime import datetime as _dt
 
 
-def _save_path(save_id):
-    os.makedirs(_SAVES_DIR, exist_ok=True)
-    return os.path.join(_SAVES_DIR, f"{save_id}.json")
+def _save_path(save_id: str, user_id: str = "guest") -> str:
+    d = _saves_dir(user_id)
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, f"{save_id}.json")
 
 
 @app.route("/api/game/saves")
 def api_game_saves_list():
-    os.makedirs(_SAVES_DIR, exist_ok=True)
+    uid = _user_id(_get_current_user())
+    d = _saves_dir(uid)
+    os.makedirs(d, exist_ok=True)
     saves = []
-    for fname in sorted(os.listdir(_SAVES_DIR), key=lambda f: os.path.getmtime(os.path.join(_SAVES_DIR, f)), reverse=True):
+    for fname in sorted(os.listdir(d), key=lambda f: os.path.getmtime(os.path.join(d, f)), reverse=True):
         if not fname.endswith(".json"):
             continue
         try:
-            with open(os.path.join(_SAVES_DIR, fname)) as f:
+            with open(os.path.join(d, fname)) as f:
                 s = json.load(f)
             saves.append({
                 "save_id": s.get("save_id", fname[:-5]),
@@ -1049,6 +1106,7 @@ def api_game_saves_list():
 
 @app.route("/api/game/saves", methods=["POST"])
 def api_game_saves_create():
+    uid = _user_id(_get_current_user())
     body = request.get_json(force=True) or {}
     save_id = body.get("save_id") or str(_uuid.uuid4())[:8]
     now = _dt.utcnow().isoformat()
@@ -1056,14 +1114,15 @@ def api_game_saves_create():
     record["save_id"] = save_id
     record.setdefault("created_at", now)
     record["updated_at"] = now
-    with open(_save_path(save_id), "w") as f:
+    with open(_save_path(save_id, uid), "w") as f:
         json.dump(record, f, indent=2)
     return jsonify({"save_id": save_id})
 
 
 @app.route("/api/game/saves/<save_id>")
 def api_game_saves_get(save_id):
-    path = _save_path(save_id)
+    uid = _user_id(_get_current_user())
+    path = _save_path(save_id, uid)
     if not os.path.exists(path):
         return jsonify({"error": "not found"}), 404
     with open(path) as f:
@@ -1072,9 +1131,10 @@ def api_game_saves_get(save_id):
 
 @app.route("/api/game/saves/<save_id>", methods=["PUT"])
 def api_game_saves_update(save_id):
+    uid = _user_id(_get_current_user())
     body = request.get_json(force=True) or {}
     now = _dt.utcnow().isoformat()
-    path = _save_path(save_id)
+    path = _save_path(save_id, uid)
     existing = {}
     if os.path.exists(path):
         with open(path) as f:
@@ -1090,7 +1150,8 @@ def api_game_saves_update(save_id):
 
 @app.route("/api/game/saves/<save_id>", methods=["DELETE"])
 def api_game_saves_delete(save_id):
-    path = _save_path(save_id)
+    uid = _user_id(_get_current_user())
+    path = _save_path(save_id, uid)
     if os.path.exists(path):
         os.remove(path)
     return jsonify({"ok": True})

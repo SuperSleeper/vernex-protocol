@@ -1,19 +1,67 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-June 3, 2026 (End of Session)
+June 6, 2026 (End of Session)
 
 ## Current Version
-v0.12.18
+v0.12.29
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ |
-| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ (daemon); v0.12.29 dashboard |
+| vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
+
+## Recently Completed (2026-06-06)
+
+### v0.12.29 — fix save row clicks + user identity in UI + per-user saves + version fix (dashboard)
+✅ **Fix selection screen save rows**: renamed `data-load-id` → `data-save-id`; event delegation on static containers (`sel-saves-list`, `sel-autosaves-list`) now correctly fires on dynamically rendered child rows
+✅ **User identity in header**: both `/ui` and `/game` fetch `GET /api/me` on page load; user email displayed in header (between GPU gauge and logout); game selection screen shows "Playing as: `<email>`" below subtitle; gracefully hidden on 401/failure
+✅ **Version in header**: `/game` and `/ui` Flask routes now fetch daemon `/status` at render time and pass `version` as template variable; shown immediately before JS updates with full node_id + version; fallback to `v0.12.29`
+✅ **Per-user save file isolation**: all save/load/prompt routes call `_get_current_user()` (forwards `_vsession` cookie to `127.0.0.1:5002/api/me`) and `_user_id()` (sanitizes email: `@` and `.` → `_`); save path: `~/vernex/config/game_saves/<user_id>/<id>.json`; prompt path: `~/vernex/config/game_prompts/<user_id>.json`; unauthenticated access falls back to `guest` directory
+
+### v0.12.28 — Comedic Drama genre + stat modifiers + load game on selection screen (dashboard)
+✅ **Comedic Drama genre** (🎭): 4th genre card; subtypes Workplace Comedy / Small Town Chaos / Royally Confused / Superhero Farce; stats Charisma / Wit / Luck / Clumsiness / Charm / Stubbornness; Embarrassment Meter replaces Status line; level escalation → absurdity; 1% musical number
+✅ **Stat modifiers**: `STAT_MODIFIERS` table for all genres + subtypes; applied at roll time (4d6 drop-lowest + modifier, clamped 1–20); shown inline as `(+2)` (green) / `(-2)` (red) in stat block
+✅ **Load game on selection screen**: "📂 Continue a Saved Game" + "⚡ Autosaves" sections below genre grid; fetches `/api/game/saves` on init and after reset; click-to-load goes directly to gameplay; `/api/game/saves` now returns `subtype` and `autosave` fields
+
+### v0.12.27 — CSP inline script + game context JSON injection SyntaxError fix (dashboard)
+✅ Fixed SyntaxError caused by special characters in game context strings being injected directly into `<script>` block; moved all game data to `/api/game/contexts` endpoint; JS fetches on init; resolves CSP issues
+
+### v0.12.26 — multi-genre game + D&D character creator + fixed header + WWII era + genre card fix (dashboard)
+✅ Fantasy, Sci-Fi, Action/Adventure genre selection screen with genre cards
+✅ D&D-style 4d6-drop-lowest character stat rolling per genre
+✅ Subtype picker: Fantasy (Warrior/Valkyrie/Elf Archer/Wizard/Thief), Sci-Fi (AI/Aliens/Space Travel/Time Travel), Action (Egyptian/Roman/Renaissance/Wild West/WWII)
+✅ Fixed header (position:fixed) on `/game` with GPU gauge; auto-padding adjustment
+✅ WWII era added to Action/Adventure
+✅ Genre cards changed from inline `onclick` to `addEventListener` (CSP compliance)
+
+### v0.12.25 — restore auto-scroll after GPU gauge header change (dashboard)
+✅ Auto-scroll to bottom in `/game` chat log re-wired after fixed header layout change broke it
+
+### v0.12.24 — GPU gauge bar on /ui and /game — node1 only (dashboard)
+✅ Real-time VRAM used/total, GPU utilization %, temperature polled via `nvidia-smi` at `/api/gpu`
+✅ Gauge bar in both `/ui` and `/game` headers; active (>20% util) turns green; 3s poll interval
+✅ Node1 (RTX 3070) only — multi-node GPU dashboard deferred
+
+### v0.12.23 — auto-scroll chat to bottom on send and response (dashboard)
+✅ Fixed chat log scroll behaviour in both `/ui` and `/game`: `requestAnimationFrame` scroll after user message and after assistant response
+
+### v0.12.22 — default model to gemma4:e4b on /ui and /game (dashboard)
+✅ Model selector now prefers `gemma4:e4b` when available; falls back to first model in list
+
+### v0.12.21 — /api/game/chat error handling + debug logging (dashboard)
+✅ Non-JSON Ollama responses now return HTTP 502 with truncated body; unhandled exceptions logged with full traceback; `[game/chat]` log prefix for all backend messages
+
+### v0.12.20 — Enter to send, Shift+Enter for newline on /ui and /game (dashboard)
+✅ `keydown` handler on prompt textarea: Enter submits, Shift+Enter inserts newline
+
+### v0.12.19 — fix Start Game button visibility when context collapsed (dashboard)
+✅ Start Game button no longer hidden when `<details>` context panel is collapsed; CSS z-index fix
 
 ## Recently Completed (2026-06-03)
 
+### v0.12.18 — game page at /game (dashboard)
 ✅ Text adventure game page added at `/game` (dashboard/app.py)
 ✅ `/api/models` endpoint — fetches available Ollama models from localhost:11434/api/tags
 ✅ `/api/game/chat` endpoint — multi-turn Ollama chat via messages array (bypasses vernex queue for full conversation history)
@@ -746,7 +794,8 @@ vernex-node ca enroll --bootstrap https://76.244.40.49:7701 --token '<json>'
 
 ## Key Design Rules
 - **Dashboard:** node1 (bootstrap) only. Never install vernex-dashboard on compute nodes.
-- **Update scripts:** node1 = vernex-bootstrap-setup.sh / node2 = vernex-node-setup.sh. Never swap.
+- **Update scripts:** node1 = `vernex-bootstrap-setup.sh` / node2 = `vernex-node-setup.sh`. Never swap.
+- **Game saves:** per-user under `~/vernex/config/game_saves/<user_id>/`; game prompts under `~/vernex/config/game_prompts/<user_id>.json`; `<user_id>` = email with `@` and `.` replaced by `_`; unauthenticated uses `guest/`.
 - **Docs:** RUNBOOK.md and ARCH_SPEC.md live in repo root. Claude Code must update both alongside CONTINUITY.md after every session commit.
 
 ## Workflow Preferences
@@ -825,4 +874,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol v0.12.14. Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 (CRYSTALS-Dilithium NIST FIPS 204) post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard. Distributed CA (v0.10.0): Root → Intermediate → Compute Node cert chain; Shamir K-of-N. TrustStore chain validation (v0.11.0): zero InsecureSkipVerify literals; TOFU TLS; cert_verified per peer. v0.11.1–v0.12.8: CertVerified race fix, mDNS heartbeat, 9-file split, IPv6 fix, mDNS auto-trust, bootstrap-setup.sh, clock verification, mDNS-first heartbeat (warning fully eliminated). Node-1: v0.12.8, CA initialized (root.crt + intermediate.crt), bootstrap node, 5 fresh enrollment tokens (config/enrollment_tokens.txt). Token signatures no longer printed to stdout — saved to config/token-<id>.json only. Node-2: v0.12.7 (deploy + enroll pending). Next: deploy v0.12.8 to Node-2, enroll via token from Node-1. Patent pending US App. 64/015,885, deadline March 24 2027.*
+*Vernex Protocol — daemon v0.12.18 (both nodes), dashboard v0.12.29 (node1 only). Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard, distributed CA (Root → Intermediate → Compute Node, Shamir K-of-N), clock verification (4-step NTP guard). Dashboard (node1 only): multi-genre text adventure at /game (Fantasy/Sci-Fi/Action/ComedyDrama), D&D-style 4d6 stat rolling with subtype modifiers, per-user save isolation under ~/vernex/config/game_saves/<user_id>/, Google OAuth via vernex.net relay, GPU gauge (RTX 3070). Update scripts: node1 = vernex-bootstrap-setup.sh, node2 = vernex-node-setup.sh. Patent pending US App. 64/015,885, deadline March 24 2027.*
