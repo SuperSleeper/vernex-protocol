@@ -47,9 +47,49 @@ var STAT_MODIFIERS = {
   }
 };
 
+var SLOTS = ['head', 'body', 'hands', 'feet', 'accessory1', 'accessory2', 'weapon'];
+var SLOT_NAMES = {
+  fantasy: {head:'Helmet',   body:'Cloak/Armor',   hands:'Gauntlets',      feet:'Boots',       accessory1:'Ring',       accessory2:'Amulet',      weapon:'Weapon'},
+  scifi:   {head:'Visor',    body:'Exosuit',        hands:'Gloves',         feet:'Boots',       accessory1:'Implant',    accessory2:'Comms Device',weapon:'Weapon'},
+  action:  {head:'Hat/Helm', body:'Coat/Uniform',   hands:'Gloves/Holster', feet:'Boots/Spurs', accessory1:'Badge',      accessory2:'Compass',     weapon:'Weapon'},
+  comedy:  {head:'Hat/Wig',  body:'Costume/Jacket', hands:'Gloves',         feet:'Shoes',       accessory1:'Name Tag',   accessory2:'Lucky Charm', weapon:'Prop/Gadget'}
+};
+var SKILL_KEYWORDS = {
+  fantasy: [
+    {key:'incantation', stat:'Magic',    words:['incantation','cast ','spell','enchant','arcane','conjure','invoke']},
+    {key:'battle_cry',  stat:'Strength', words:['battle cry','war cry','charge','strike','smite','cleave']},
+    {key:'focus',       stat:'Agility',  words:['dodge','evade','swift','nimble','deft','maneuver']},
+    {key:'persuasion',  stat:'Charisma', words:['persuade','charm','deceive','bluff','convince']}
+  ],
+  scifi: [
+    {key:'analysis',   stat:'Intelligence', words:['calculate','analyze','compute','deduce','scan']},
+    {key:'diplomacy',  stat:'Charisma',     words:['negotiate','diplomatic','convince','treaty']},
+    {key:'tech_use',   stat:'Tech Skill',   words:['trajectory','vector','circuit','override','hack']},
+    {key:'logic_trap', stat:'Intelligence', words:['paradox','temporal','causality','loop','timeline']}
+  ],
+  action: [
+    {key:'command',  stat:'Charisma', words:['decree','proclaim','command','order','declare']},
+    {key:'oratory',  stat:'Charisma', words:['speech','rally','inspire','address','oration']},
+    {key:'bluff',    stat:'Cunning',  words:['bluff','feint','deceive','trick','ruse','gambit']},
+    {key:'strategy', stat:'Cunning',  words:['cipher','signal','encrypt','flanking','outmaneuver']}
+  ],
+  comedy: [
+    {key:'excuse',    stat:'Wit',      words:['excuse','explain','justify','apologize']},
+    {key:'gossip',    stat:'Charm',    words:['gossip','rumor','heard','whisper']},
+    {key:'dignity',   stat:'Charisma', words:['dignified','proper','regal','composed','decorum']},
+    {key:'luck_push', stat:'Luck',     words:['fortune','coincidence','twist of fate','stumble upon']}
+  ]
+};
+var RARITY_COLORS = {common:'#8b949e', uncommon:'#3fb950', rare:'#58a6ff', legendary:'#d4a017', cursed:'#f85149'};
+var DEFEAT_KEYWORDS = ['defeated','slain','destroyed','falls unconscious','collapses','vanquished','killed','is dead'];
+var XP_THRESHOLDS = [3, 6, 10, 15];
+
 // ── State ─────────────────────────────────────────────────────
 var _genre = null, _rolledStats = null, _character = null;
 var _history = [], _gameStarted = false, _currentSaveId = null, _turnCount = 0;
+var _inventory = {equipped: {}, bag: [], bag_capacity: 5};
+var _level = 1, _levelXp = 0, _skillUses = {}, _skillRanks = {};
+var _pendingLootItem = null;
 
 // ── View management ───────────────────────────────────────────
 function showView(v) {
@@ -250,6 +290,9 @@ async function startGame() {
     genre: _genre, name: name, gender: getGender(),
     subtype: getSubtype(), stats: _rolledStats
   };
+  _inventory = {equipped: {}, bag: [], bag_capacity: 5};
+  _level = 1; _levelXp = 0; _skillUses = {}; _skillRanks = {};
+  _pendingLootItem = null;
   var ctx = document.getElementById('game-context').value.trim() || buildContext();
   renderCharSheet();
   showView('view-play');
@@ -274,15 +317,360 @@ async function startGame() {
   }
 }
 
+// ── Inventory helpers ─────────────────────────────────────────
+function computeEffectiveStats() {
+  if (!_character) return {};
+  var eff = {};
+  Object.keys(_character.stats).forEach(function(s) { eff[s] = _character.stats[s]; });
+  Object.keys(_inventory.equipped || {}).forEach(function(slot) {
+    var item = _inventory.equipped[slot];
+    if (!item) return;
+    Object.keys(item.stat_effects || {}).forEach(function(s) {
+      if (eff.hasOwnProperty(s)) eff[s] = Math.min(20, Math.max(1, eff[s] + item.stat_effects[s]));
+    });
+    if (item.cursed && item.cursed_revealed) {
+      Object.keys(item.curse_effects || {}).forEach(function(s) {
+        if (eff.hasOwnProperty(s)) eff[s] = Math.min(20, Math.max(1, eff[s] + item.curse_effects[s]));
+      });
+    }
+  });
+  return eff;
+}
+
+function rarityClass(item) {
+  if (!item) return 'rc-common';
+  if (item.cursed && !item.cursed_revealed) return 'rc-uncommon';
+  return 'rc-' + (item.rarity || 'common');
+}
+
+function formatStatEffects(effects) {
+  if (!effects) return '';
+  var keys = Object.keys(effects);
+  if (!keys.length) return '';
+  return keys.map(function(k) {
+    var v = effects[k];
+    return (v > 0 ? '+' : '') + v + ' ' + k.slice(0, 3);
+  }).join(' ');
+}
+
+function appendSystemMsg(markdown) {
+  var log = document.getElementById('chat-log');
+  if (!log) return;
+  var div = document.createElement('div');
+  div.className = 'msg system';
+  div.innerHTML = (typeof marked !== 'undefined')
+    ? marked.parse(markdown, {breaks: true, gfm: true})
+    : markdown.replace(/\*\*/g, '').replace(/\n/g, '<br>');
+  log.appendChild(div);
+  requestAnimationFrame(function() { log.scrollTop = log.scrollHeight; });
+}
+
+function buildInventoryContext() {
+  if (!_character || !_inventory) return '';
+  var eff = computeEffectiveStats();
+  var equipped = _inventory.equipped || {};
+  var bag = _inventory.bag || [];
+  var slotNames = SLOT_NAMES[_character.genre] || SLOT_NAMES['fantasy'];
+  var hasEquipped = Object.keys(equipped).length > 0;
+  if (!hasEquipped && !bag.length && _level === 1) return '';
+
+  var lines = ['\n\n### CURRENT CHARACTER STATE'];
+  var xpNeed = XP_THRESHOLDS[Math.min(_level - 1, XP_THRESHOLDS.length - 1)] || 15;
+  lines.push('Level: ' + _level + '  XP: ' + _levelXp + '/' + xpNeed);
+
+  lines.push('\nEffective Stats (base + equipment bonuses):');
+  Object.keys(_character.stats).forEach(function(s) {
+    var base = _character.stats[s], effVal = eff[s], diff = effVal - base;
+    lines.push('  ' + s + ': ' + effVal + (diff !== 0 ? ' (base ' + base + (diff > 0 ? ' +' : ' ') + diff + ')' : ''));
+  });
+
+  var eqLines = SLOTS.map(function(slot) {
+    var item = equipped[slot];
+    if (!item) return null;
+    var fx = formatStatEffects(item.stat_effects);
+    return '  ' + (slotNames[slot] || slot) + ': ' + item.name + (fx ? ' [' + fx + ']' : '');
+  }).filter(Boolean);
+  if (eqLines.length) { lines.push('\nEquipped:'); eqLines.forEach(function(l) { lines.push(l); }); }
+
+  if (bag.length) {
+    lines.push('\nBag (' + bag.length + '/' + (_inventory.bag_capacity || 5) + '):');
+    bag.forEach(function(item) {
+      var fx = formatStatEffects(item.stat_effects);
+      lines.push('  - ' + item.name + (fx ? ' [' + fx + ']' : ''));
+    });
+  }
+
+  var skills = SKILL_KEYWORDS[_character.genre] || [];
+  var ranked = skills.filter(function(sk) { return (_skillRanks[sk.key] || 0) > 0; });
+  if (ranked.length) {
+    lines.push('\nSkill Ranks:');
+    ranked.forEach(function(sk) { lines.push('  ' + sk.key.replace('_', ' ') + ': Rank ' + _skillRanks[sk.key] + ' → ' + sk.stat + ' +' + _skillRanks[sk.key]); });
+  }
+  return lines.join('\n');
+}
+
 function renderCharSheet() {
-  document.getElementById('cs-name').textContent = _character.name + ' · ' + _character.subtype;
-  document.getElementById('cs-inner').innerHTML = Object.keys(_character.stats).map(function(n) {
-    return '<div class="stat-row">'
+  if (!_character) return;
+  var genre = _character.genre;
+  var slotNames = SLOT_NAMES[genre] || SLOT_NAMES['fantasy'];
+  var eff = computeEffectiveStats();
+  var equipped = _inventory.equipped || {};
+  var bag = _inventory.bag || [];
+  var bagCap = _inventory.bag_capacity || 5;
+  var skills = SKILL_KEYWORDS[genre] || [];
+  var xpNeed = XP_THRESHOLDS[Math.min(_level - 1, XP_THRESHOLDS.length - 1)] || 15;
+  var xpPct = Math.min(100, Math.round(_levelXp / xpNeed * 100));
+
+  document.getElementById('cs-name').textContent = _character.name + ' \xb7 ' + _character.subtype + ' \xb7 Lv ' + _level;
+
+  var html = '<div class="cs-stat-grid">';
+  Object.keys(_character.stats).forEach(function(n) {
+    var base = _character.stats[n], effVal = eff[n], diff = effVal - base;
+    var diffStr = diff !== 0
+      ? ' <span style="color:' + (diff > 0 ? '#3fb950' : '#f85149') + '">' + (diff > 0 ? '+' : '') + diff + '</span>'
+      : '';
+    html += '<div class="stat-row">'
       + '<span class="stat-name">' + n + '</span>'
-      + '<span class="stat-bar">' + statBar(_character.stats[n]) + '</span>'
-      + '<span class="stat-val">&nbsp;' + _character.stats[n] + '</span>'
+      + '<span class="stat-bar">' + statBar(effVal) + '</span>'
+      + '<span class="stat-val">&nbsp;' + effVal + diffStr + '</span>'
       + '</div>';
-  }).join('');
+  });
+  html += '</div>';
+
+  // XP bar
+  html += '<div class="cs-section"><div class="cs-xp-row">'
+    + '<span style="color:#d4a017;font-size:.7rem;font-weight:bold">Lv ' + _level + '</span>'
+    + '<div class="cs-xp-track"><div class="cs-xp-fill" style="width:' + xpPct + '%"></div></div>'
+    + '<span>' + _levelXp + '/' + xpNeed + ' XP</span>'
+    + '</div></div>';
+
+  // Equipped slots
+  html += '<div class="cs-section"><div class="cs-section-hdr">Equipped</div>';
+  SLOTS.forEach(function(slot) {
+    var item = equipped[slot];
+    var lbl = escHtml(slotNames[slot] || slot);
+    html += '<div class="cs-equipped-slot"><span class="cs-slot-lbl">' + lbl + '</span>';
+    if (item) {
+      var rc = rarityClass(item);
+      var fx = formatStatEffects(item.stat_effects);
+      html += '<span class="' + rc + '" style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + escHtml(item.name) + '</span>'
+        + (fx ? '<span class="cs-item-fx">[' + escHtml(fx) + ']</span>' : '')
+        + '<button class="btn-inv" data-unequip="' + escHtml(slot) + '">⬆</button>';
+    } else {
+      html += '<span style="color:#3d4d5e;font-style:italic;font-size:.65rem;flex:1">— empty —</span>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // Bag
+  html += '<div class="cs-section">'
+    + '<div class="cs-bag-hdr"><div class="cs-section-hdr" style="margin-bottom:0">Bag</div>'
+    + '<span class="cs-bag-cap">🎒 ' + bag.length + '/' + bagCap + '</span></div>';
+  if (!bag.length) {
+    html += '<div style="color:#3d4d5e;font-size:.7rem;font-style:italic;padding:2px 0">Empty</div>';
+  } else {
+    bag.forEach(function(item) {
+      var rc = rarityClass(item);
+      var fx = formatStatEffects(item.stat_effects);
+      html += '<div class="cs-bag-row">'
+        + '<span class="' + rc + '" style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + escHtml(item.name) + '</span>'
+        + (fx ? '<span class="cs-item-fx">[' + escHtml(fx) + ']</span>' : '')
+        + '<button class="btn-inv" data-equip-id="' + escHtml(item.id) + '" data-equip-slot="' + escHtml(item.slot) + '">Equip</button>'
+        + '<button class="btn-inv drop" data-drop-id="' + escHtml(item.id) + '" data-drop-name="' + escHtml(item.name) + '">Drop</button>'
+        + '</div>';
+    });
+  }
+  html += '</div>';
+
+  // Skills
+  if (skills.length) {
+    html += '<div class="cs-section"><div class="cs-section-hdr">Skills</div>';
+    skills.forEach(function(skill) {
+      var rank = _skillRanks[skill.key] || 0;
+      var uses = _skillUses[skill.key] || 0;
+      var pct = Math.round((uses % 5) / 5 * 100);
+      html += '<div class="cs-skill-row">'
+        + '<span style="width:80px;overflow:hidden;white-space:nowrap;font-size:.65rem">' + escHtml(skill.key.replace('_', ' ')) + '</span>'
+        + '<div class="cs-skill-track"><div class="cs-skill-fill" style="width:' + pct + '%"></div></div>'
+        + '<span style="width:28px">' + (uses % 5) + '/5</span>'
+        + '<span style="color:' + (rank > 0 ? '#d4a017' : '#3d4d5e') + '">Rk' + rank + '</span>'
+        + '</div>';
+    });
+    html += '</div>';
+  }
+
+  document.getElementById('cs-inner').innerHTML = html;
+
+  // Wire inventory buttons (re-attached after innerHTML replace)
+  document.querySelectorAll('[data-unequip]').forEach(function(btn) {
+    btn.addEventListener('click', function() { doUnequip(btn.getAttribute('data-unequip')); });
+  });
+  document.querySelectorAll('[data-equip-id]').forEach(function(btn) {
+    btn.addEventListener('click', function() { doEquip(btn.getAttribute('data-equip-id'), btn.getAttribute('data-equip-slot')); });
+  });
+  document.querySelectorAll('[data-drop-id]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      if (confirm('Drop ' + btn.getAttribute('data-drop-name') + '? This cannot be undone.')) {
+        doDrop(btn.getAttribute('data-drop-id'));
+      }
+    });
+  });
+}
+
+// ── Inventory actions ─────────────────────────────────────────
+async function doEquip(itemId, slot) {
+  if (!_currentSaveId) return;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/inventory/equip', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({item_id: itemId, slot: slot})
+    });
+    var d = await r.json();
+    if (d.ok) { _inventory.equipped = d.equipped; _inventory.bag = d.bag; renderCharSheet(); }
+    else appendSystemMsg('Could not equip: ' + (d.error || 'error'));
+  } catch(e) {}
+}
+
+async function doUnequip(slot) {
+  if (!_currentSaveId) return;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/inventory/unequip', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slot: slot})
+    });
+    var d = await r.json();
+    if (d.ok) { _inventory.equipped = d.equipped; _inventory.bag = d.bag; renderCharSheet(); }
+    else appendSystemMsg(d.error === 'bag full' ? 'Bag is full — drop an item first.' : 'Could not unequip: ' + (d.error || 'error'));
+  } catch(e) {}
+}
+
+async function doDrop(itemId) {
+  if (!_currentSaveId) return;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/inventory/drop', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({item_id: itemId})
+    });
+    var d = await r.json();
+    if (d.ok) {
+      _inventory.bag = d.bag;
+      renderCharSheet();
+      if (_pendingLootItem) { var it = _pendingLootItem; _pendingLootItem = null; addItemToBag(it); }
+    }
+  } catch(e) {}
+}
+
+async function addItemToBag(item) {
+  if (!item) return;
+  var fx = formatStatEffects(item.stat_effects);
+  if (_currentSaveId) {
+    try {
+      var r = await fetch('/api/game/saves/' + _currentSaveId + '/inventory/add', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({item: item})
+      });
+      var d = await r.json();
+      if (d.ok) {
+        _inventory.bag = d.bag;
+        renderCharSheet();
+        appendSystemMsg('⚔️ **Loot:** ' + item.name + (fx ? ' [' + fx + ']' : '') + ' added to bag.');
+        return;
+      } else if (d.bag_full) {
+        _pendingLootItem = item;
+        appendSystemMsg('🎒 Bag full! Drop an item to pick up **' + item.name + '**' + (fx ? ' [' + fx + ']' : '') + '.');
+        return;
+      }
+    } catch(e) {}
+  }
+  _inventory.bag.push(item);
+  renderCharSheet();
+  appendSystemMsg('⚔️ **Loot:** ' + item.name + (fx ? ' [' + fx + ']' : '') + ' added to bag.');
+}
+
+async function handleLootDrop(isBoss) {
+  if (!_character) return;
+  try {
+    var r = await fetch('/api/game/item/generate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({genre: _character.genre, boss: !!isBoss})
+    });
+    var item = await r.json();
+    if (item.error) return;
+    await addItemToBag(item);
+    handleXpGain(isBoss ? 2 : 1);
+  } catch(e) {}
+}
+
+function detectLootDrop(text) {
+  var lower = text.toLowerCase();
+  var defeated = DEFEAT_KEYWORDS.some(function(w) { return lower.indexOf(w) >= 0; });
+  if (!defeated) return;
+  var bossWords = ['boss','captain','general','king','queen','lord','master','dragon','demon','elder','chief','warlord'];
+  var isBoss = bossWords.some(function(w) { return lower.indexOf(w) >= 0; });
+  handleLootDrop(isBoss);
+}
+
+function handleSkillTracking(text) {
+  if (!_character) return;
+  var lower = text.toLowerCase();
+  var skills = SKILL_KEYWORDS[_character.genre] || [];
+  skills.forEach(function(skill) {
+    var found = skill.words.some(function(w) { return lower.indexOf(w) >= 0; });
+    if (!found) return;
+    _skillUses[skill.key] = (_skillUses[skill.key] || 0) + 1;
+    var uses = _skillUses[skill.key];
+    if (uses % 5 === 0) {
+      _skillRanks[skill.key] = (_skillRanks[skill.key] || 0) + 1;
+      if (_character.stats.hasOwnProperty(skill.stat)) {
+        _character.stats[skill.stat] = Math.min(20, _character.stats[skill.stat] + 1);
+      }
+      appendSystemMsg('📈 **Skill rank up!** ' + skill.key.replace('_', ' ') + ' → Rank ' + _skillRanks[skill.key] + ' | ' + skill.stat + ' +1');
+      renderCharSheet();
+    }
+  });
+}
+
+function handleXpGain(amount) {
+  if (!_character) return;
+  _levelXp += amount;
+  var needed = XP_THRESHOLDS[Math.min(_level - 1, XP_THRESHOLDS.length - 1)] || 15;
+  if (_levelXp >= needed && _level < 5) {
+    _levelXp -= needed;
+    _level++;
+    renderCharSheet();
+    showLevelUpChoice(_level);
+  } else {
+    renderCharSheet();
+  }
+}
+
+function showLevelUpChoice(newLevel) {
+  var log = document.getElementById('chat-log');
+  if (!log || !_character) return;
+  var stats = Object.keys(_character.stats);
+  var eff = computeEffectiveStats();
+  var div = document.createElement('div');
+  div.className = 'msg system';
+  div.innerHTML = '<strong style="color:#d4a017">🎉 LEVEL UP! You reached Level ' + newLevel + '!</strong><br>'
+    + 'Choose 2 stats to increase by +2:<br>'
+    + '<div class="lvl-choices">'
+    + stats.map(function(s) {
+        return '<label><input type="checkbox" class="lvl-choice" value="' + escHtml(s) + '"> '
+          + escHtml(s) + ' (' + (eff[s] || 0) + ')</label>';
+      }).join('')
+    + '</div><button class="btn-lvl">Confirm</button>';
+  div.querySelector('.btn-lvl').addEventListener('click', function() {
+    var checked = [].slice.call(div.querySelectorAll('.lvl-choice:checked')).map(function(c) { return c.value; });
+    if (checked.length !== 2) { alert('Choose exactly 2 stats.'); return; }
+    checked.forEach(function(stat) {
+      if (_character.stats.hasOwnProperty(stat)) _character.stats[stat] = Math.min(20, _character.stats[stat] + 2);
+    });
+    div.innerHTML = '<strong style="color:#d4a017">✅ Level ' + newLevel + ' bonuses applied:</strong> ' + checked.join(' & ') + ' +2 each';
+    renderCharSheet();
+  });
+  log.appendChild(div);
+  requestAnimationFrame(function() { log.scrollTop = log.scrollHeight; });
 }
 
 // ── Chat ──────────────────────────────────────────────────────
@@ -298,11 +686,17 @@ async function sendTurn(e) {
   document.getElementById('prompt').value = '';
   btn.disabled = true; btn.textContent = '...';
   try {
-    var resp = await gameFetch(_history, model);
+    var invCtx = buildInventoryContext();
+    var msgs = invCtx
+      ? _history.slice(0, -1).concat([{role:'system', content:invCtx}], _history.slice(-1))
+      : _history;
+    var resp = await gameFetch(msgs, model);
     _history.push({role:'assistant', content:resp});
     appendMsg('assistant', resp);
     _turnCount++;
     if (_turnCount % 5 === 0) autoSave();
+    detectLootDrop(resp);
+    handleSkillTracking(resp);
   } catch(err) {
     _history.pop();
     appendMsg('error', 'Request failed: ' + err.message);
@@ -340,6 +734,9 @@ function appendMsg(role, content) {
 function resetGame() {
   _history = []; _gameStarted = false; _character = null; _rolledStats = null;
   _genre = null; _currentSaveId = null; _turnCount = 0;
+  _inventory = {equipped: {}, bag: [], bag_capacity: 5};
+  _level = 1; _levelXp = 0; _skillUses = {}; _skillRanks = {};
+  _pendingLootItem = null;
   document.getElementById('prompt').disabled = true;
   document.getElementById('submit-btn').disabled = true;
   document.getElementById('prompt').value = '';
@@ -373,7 +770,9 @@ async function saveGame(name, id) {
   var pay = {
     save_name: name, genre: _character.genre, subtype: _character.subtype,
     char_name: _character.name, gender: _character.gender,
-    stats: _character.stats, history: _history
+    stats: _character.stats, history: _history,
+    equipped: _inventory.equipped, bag: _inventory.bag, bag_capacity: _inventory.bag_capacity,
+    level: _level, level_xp: _levelXp, skill_uses: _skillUses, skill_ranks: _skillRanks
   };
   try {
     var url = id ? '/api/game/saves/' + id : '/api/game/saves';
@@ -395,7 +794,9 @@ async function autoSave() {
   var pay = {
     save_name: 'Autosave', genre: _character.genre, subtype: _character.subtype,
     char_name: _character.name, gender: _character.gender,
-    stats: _character.stats, history: _history, autosave: true
+    stats: _character.stats, history: _history, autosave: true,
+    equipped: _inventory.equipped, bag: _inventory.bag, bag_capacity: _inventory.bag_capacity,
+    level: _level, level_xp: _levelXp, skill_uses: _skillUses, skill_ranks: _skillRanks
   };
   try {
     await fetch('/api/game/saves/autosave-' + _character.genre, {
@@ -442,6 +843,10 @@ async function loadGame(id) {
     var s = await fetch('/api/game/saves/' + id).then(function(r) { return r.json(); });
     _character = {genre: s.genre, name: s.char_name, gender: s.gender, subtype: s.subtype, stats: s.stats};
     _history = s.history || []; _currentSaveId = id; _turnCount = 0; _gameStarted = true;
+    _inventory = {equipped: s.equipped || {}, bag: s.bag || [], bag_capacity: s.bag_capacity || 5};
+    _level = s.level || 1; _levelXp = s.level_xp || 0;
+    _skillUses = s.skill_uses || {}; _skillRanks = s.skill_ranks || {};
+    _pendingLootItem = null;
     renderCharSheet();
     showView('view-play');
     hideLoadPanel();

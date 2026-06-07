@@ -6,6 +6,7 @@ import re
 import subprocess
 import threading
 import time
+import random
 
 app = Flask(__name__)
 
@@ -743,7 +744,8 @@ details[open]>summary::before{transform:rotate(90deg)}
 /* ── Gameplay ── */
 .cs-panel{background:#16213e;border:1px solid #1f2d45;border-radius:7px;padding:10px 12px;margin-bottom:10px}
 .cs-panel summary{font-size:.8rem;font-weight:600;color:#8892a4}
-.cs-inner{display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;padding-top:8px;font-family:'Courier New',monospace}
+.cs-inner{display:block;padding-top:6px;font-family:'Courier New',monospace}
+.cs-stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 14px}
 .save-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
 .btn-qs{background:#1a2e0f;color:#3fb950;border:1px solid #3fb950;border-radius:5px;padding:5px 11px;font-size:.77rem;cursor:pointer;font-family:inherit}
 .btn-qs:hover:not(:disabled){background:#3fb950;color:#0d1117}
@@ -778,6 +780,32 @@ details[open]>summary::before{transform:rotate(90deg)}
 .msg.assistant strong{color:#e6edf3}
 .msg.assistant blockquote{border-left:3px solid #0f3460;margin:.3em 0;padding-left:.8em;color:#8892a4}
 .msg.error{background:#3d0f1a;border:1px solid #e94560;font-size:.85rem;align-self:stretch}
+/* ── Inventory / Level / Skills ── */
+.cs-section{padding-top:6px;margin-top:6px;border-top:1px solid #21262d}
+.cs-section-hdr{font-size:.67rem;color:#8892a4;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+.cs-equipped-slot{display:flex;align-items:center;gap:5px;padding:2px 0;font-size:.71rem}
+.cs-slot-lbl{width:88px;color:#8892a4;flex-shrink:0;font-size:.66rem}
+.cs-item-fx{color:#8892a4;font-size:.64rem;margin-left:3px;white-space:nowrap;flex-shrink:0}
+.cs-bag-row{display:flex;align-items:center;gap:5px;padding:2px 0;font-size:.71rem}
+.cs-bag-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}
+.cs-bag-cap{font-size:.67rem;color:#8892a4}
+.rc-common{color:#8b949e}.rc-uncommon{color:#3fb950}.rc-rare{color:#58a6ff}.rc-legendary{color:#d4a017}.rc-cursed{color:#f85149}
+.btn-inv{background:transparent;border:1px solid #30363d;color:#8892a4;border-radius:3px;padding:1px 5px;font-size:.64rem;cursor:pointer;font-family:inherit;flex-shrink:0;line-height:1.4}
+.btn-inv:hover{border-color:#58a6ff;color:#58a6ff}
+.btn-inv.drop{border-color:#3d1a1a;color:#f85149}
+.btn-inv.drop:hover{background:#f85149;color:#0d1117}
+.cs-xp-row{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.71rem}
+.cs-xp-track{background:#161b22;border-radius:2px;height:5px;flex:1;overflow:hidden}
+.cs-xp-fill{height:100%;background:#d4a017;border-radius:2px;transition:width .3s}
+.cs-skill-row{display:flex;align-items:center;gap:5px;padding:2px 0;font-size:.66rem;color:#8892a4}
+.cs-skill-track{background:#161b22;border-radius:2px;height:3px;width:32px;overflow:hidden;flex-shrink:0}
+.cs-skill-fill{height:100%;background:#1f6feb;border-radius:2px}
+.msg.system{background:#1a1600;border:1px solid #3d2e00;align-self:stretch;font-size:.82rem;font-family:'Courier New',monospace;padding:8px 12px}
+.msg.system p{margin:.3em 0}
+.lvl-choices{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.lvl-choices label{cursor:pointer;color:#e0e0e0;font-size:.8rem}
+.btn-lvl{background:#238636;color:#fff;border:none;border-radius:4px;padding:5px 12px;font-size:.8rem;cursor:pointer;font-family:inherit;margin-top:4px}
+.btn-lvl:hover{background:#2ea043}
 .input-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
 select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px;font-size:.85rem;font-family:inherit}
 #prompt{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:10px;font-size:.9rem;width:100%;resize:vertical;min-height:60px;font-family:inherit}
@@ -1071,6 +1099,171 @@ def api_game_prompts_save():
 import uuid as _uuid
 from datetime import datetime as _dt
 
+_ALL_SLOTS = ['head', 'body', 'hands', 'feet', 'accessory1', 'accessory2', 'weapon']
+
+_ITEM_WORDS = {
+    'fantasy': {
+        'adjectives': ['Ancient', 'Enchanted', 'Ethereal', 'Obsidian', 'Gilded', 'Spectral',
+                       'Verdant', 'Infernal', 'Celestial', 'Runed', 'Frostbound', 'Blazing',
+                       'Shadowed', 'Sacred', 'Moonlit'],
+        'nouns': {
+            'head':       ['Helm', 'Crown', 'Circlet', 'Hood', 'Visage'],
+            'body':       ['Cloak', 'Robe', 'Armor', 'Mantle', 'Vestment'],
+            'hands':      ['Gauntlets', 'Gloves', 'Bracers', 'Wraps'],
+            'feet':       ['Boots', 'Greaves', 'Sandals', 'Treads'],
+            'accessory1': ['Ring', 'Band', 'Seal', 'Signet'],
+            'accessory2': ['Amulet', 'Pendant', 'Talisman', 'Charm'],
+            'weapon':     ['Sword', 'Staff', 'Dagger', 'Bow', 'Axe', 'Wand', 'Spear'],
+        },
+        'phrases': ['the Forgotten Age', 'Shadow Wraiths', 'the Fallen King', 'Ember Spirits',
+                    'the Arcane Rift', 'Lost Souls', 'Dragon Fire', 'the Elder Grove',
+                    'Starfall', 'the Moonless Night'],
+    },
+    'scifi': {
+        'adjectives': ['Quantum', 'Plasma', 'Neural', 'Nano', 'Photon', 'Kinetic', 'Adaptive',
+                       'Stealth', 'Reinforced', 'Tactical', 'Bio-Synth', 'Hyper', 'Cryo'],
+        'nouns': {
+            'head':       ['Visor', 'Helm', 'Interface', 'Scanner', 'Headset'],
+            'body':       ['Exosuit', 'Armor', 'Vest', 'Harness', 'Carapace'],
+            'hands':      ['Gauntlets', 'Gloves', 'Manipulators', 'Interface'],
+            'feet':       ['Boots', 'Thrusters', 'Treads', 'Stabilizers'],
+            'accessory1': ['Implant', 'Chip', 'Module', 'Core'],
+            'accessory2': ['Comms', 'Beacon', 'Relay', 'Node'],
+            'weapon':     ['Blaster', 'Rifle', 'Blade', 'Cannon', 'Emitter', 'Disruptor'],
+        },
+        'phrases': ['Deep Space', 'Neural Override', 'Quantum Flux', 'the Void Protocol',
+                    'AI Singularity', 'Zero-Point', 'Dark Matter', 'the Cryo-Wars',
+                    'Nano-Swarm', 'the Galactic Accord'],
+    },
+    'action': {
+        'adjectives': ['Battle-Worn', 'Gilded', 'Frontier', 'Imperial', 'Veteran', 'Ancient',
+                       'Legendary', 'Rugged', 'Ornate', 'Stolen', 'Polished', 'Scarred'],
+        'nouns': {
+            'head':       ['Helmet', 'Hat', 'Cap', 'Helm', 'Headband'],
+            'body':       ['Coat', 'Armor', 'Uniform', 'Jacket', 'Vest'],
+            'hands':      ['Gloves', 'Gauntlets', 'Holster', 'Bracers'],
+            'feet':       ['Boots', 'Spurs', 'Sandals', 'Greaves'],
+            'accessory1': ['Badge', 'Medal', 'Token', 'Coin'],
+            'accessory2': ['Compass', 'Watch', 'Map', 'Sextant'],
+            'weapon':     ['Sword', 'Pistol', 'Rifle', 'Knife', 'Spear', 'Bow', 'Lance'],
+        },
+        'phrases': ['the Last Campaign', 'the Desert Sun', 'Fallen Generals', 'the Silk Road',
+                    'Forgotten Empires', 'the Iron Age', 'Desert Raiders', 'Distant Shores',
+                    'the Crimson War', 'Lost Legions'],
+    },
+    'comedy': {
+        'adjectives': ['Absurd', 'Suspicious', 'Magnificent', 'Comical', 'Embarrassing',
+                       'Inexplicable', 'Pompous', 'Glorious', 'Awkward', 'Ludicrous',
+                       'Bewildering', 'Ostentatious', 'Preposterous'],
+        'nouns': {
+            'head':       ['Hat', 'Wig', 'Crown', 'Cap', 'Beret'],
+            'body':       ['Jacket', 'Costume', 'Blazer', 'Uniform', 'Onesie'],
+            'hands':      ['Gloves', 'Mittens', 'Gauntlets', 'Oven Mitts'],
+            'feet':       ['Shoes', 'Slippers', 'Loafers', 'Flip-Flops'],
+            'accessory1': ['Name Tag', 'Badge', 'Sticker', 'Lanyard'],
+            'accessory2': ['Charm', 'Trinket', 'Knick-Knack', 'Bobble'],
+            'weapon':     ['Briefcase', 'Mop', 'Stapler', 'Umbrella', 'Ruler', 'Clipboard'],
+        },
+        'phrases': ['Questionable Decisions', 'Cosmic Embarrassment', 'Unfortunate Circumstances',
+                    'Great Misunderstandings', 'Workplace Chaos', 'Unexpected Promotion',
+                    'Hilarious Consequences', 'Suspicious Origins'],
+    },
+}
+
+_GENRE_STATS = {
+    'fantasy': ['Strength', 'Stamina', 'Charisma', 'Magic', 'Agility', 'Luck'],
+    'scifi':   ['Intelligence', 'Tech Skill', 'Agility', 'Charisma', 'Endurance', 'Luck'],
+    'action':  ['Strength', 'Stamina', 'Charisma', 'Cunning', 'Agility', 'Luck'],
+    'comedy':  ['Charisma', 'Wit', 'Luck', 'Clumsiness', 'Charm', 'Stubbornness'],
+}
+
+
+def _generate_item(genre: str, slot: str, rarity_override: str = None) -> dict:
+    words = _ITEM_WORDS.get(genre, _ITEM_WORDS['fantasy'])
+    stats = _GENRE_STATS.get(genre, _GENRE_STATS['fantasy'])
+
+    if rarity_override:
+        rarity = rarity_override
+    else:
+        roll = random.random() * 100
+        if roll < 60:    rarity = 'common'
+        elif roll < 85:  rarity = 'uncommon'
+        elif roll < 95:  rarity = 'rare'
+        elif roll < 99:  rarity = 'legendary'
+        else:            rarity = 'cursed'
+
+    primary = random.choice(stats)
+    others = [s for s in stats if s != primary]
+    secondary = random.choice(others) if others else None
+    third_cands = [s for s in stats if s not in [primary, secondary]] if secondary else []
+
+    stat_effects: dict = {}
+    curse_effects: dict = {}
+
+    if rarity == 'common':
+        stat_effects[primary] = 1
+    elif rarity == 'uncommon':
+        stat_effects[primary] = 2
+        if secondary:
+            stat_effects[secondary] = -1
+    elif rarity == 'rare':
+        stat_effects[primary] = 3
+        if secondary:
+            stat_effects[secondary] = -1
+    elif rarity == 'legendary':
+        stat_effects[primary] = 4
+        if secondary:
+            stat_effects[secondary] = 2
+        if third_cands:
+            stat_effects[random.choice(third_cands)] = -1
+    elif rarity == 'cursed':
+        stat_effects[primary] = 2
+        if secondary:
+            curse_effects[secondary] = -3
+
+    slot_nouns = words['nouns'].get(slot, words['nouns'].get('weapon', ['Item']))
+    name = (
+        random.choice(words['adjectives']) + ' '
+        + random.choice(slot_nouns) + ' of '
+        + random.choice(words['phrases'])
+    )
+
+    descs = {
+        'common':    f"A serviceable {slot_nouns[0].lower()} with modest enhancement.",
+        'uncommon':  f"A well-crafted {slot_nouns[0].lower()} imbued with minor power.",
+        'rare':      f"A remarkable {slot_nouns[0].lower()} crackling with potent energy.",
+        'legendary': f"A legendary {slot_nouns[0].lower()} whose power reshapes fate itself.",
+        'cursed':    f"A {slot_nouns[0].lower()} that radiates an unsettling but enticing aura.",
+    }
+
+    return {
+        'id': str(_uuid.uuid4())[:8],
+        'name': name,
+        'slot': slot,
+        'rarity': rarity,
+        'stat_effects': stat_effects,
+        'curse_effects': curse_effects,
+        'equipped': False,
+        'cursed': rarity == 'cursed',
+        'cursed_revealed': False,
+        'description': descs.get(rarity, descs['common']),
+    }
+
+
+def _get_save_record(save_id: str, user_id: str):
+    path = _save_path(save_id, user_id)
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def _write_save_record(save_id: str, user_id: str, record: dict):
+    record['save_id'] = save_id
+    record['updated_at'] = _dt.utcnow().isoformat()
+    with open(_save_path(save_id, user_id), 'w') as f:
+        json.dump(record, f, indent=2)
+
 
 def _save_path(save_id: str, user_id: str = "guest") -> str:
     d = _saves_dir(user_id)
@@ -1155,6 +1348,120 @@ def api_game_saves_delete(save_id):
     if os.path.exists(path):
         os.remove(path)
     return jsonify({"ok": True})
+
+
+@app.route("/api/game/item/generate", methods=["POST"])
+def api_game_item_generate():
+    body = request.get_json(force=True) or {}
+    genre = body.get("genre", "fantasy")
+    slot = body.get("slot")
+    rarity_override = body.get("rarity_override")
+    boss = body.get("boss", False)
+    if boss and not rarity_override:
+        rarity_override = random.choice(["rare", "rare", "legendary"])
+    if slot not in _ALL_SLOTS:
+        slot = random.choice(_ALL_SLOTS)
+    return jsonify(_generate_item(genre, slot, rarity_override))
+
+
+@app.route("/api/game/saves/<save_id>/inventory")
+def api_inventory_get(save_id):
+    uid = _user_id(_get_current_user())
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({
+        "equipped": s.get("equipped", {}),
+        "bag": s.get("bag", []),
+        "bag_capacity": s.get("bag_capacity", 5),
+    })
+
+
+@app.route("/api/game/saves/<save_id>/inventory/equip", methods=["POST"])
+def api_inventory_equip(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    item_id = body.get("item_id")
+    slot = body.get("slot")
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    equipped = s.get("equipped", {})
+    bag = s.get("bag", [])
+    item = next((i for i in bag if i.get("id") == item_id), None)
+    if not item:
+        return jsonify({"error": "item not in bag"}), 400
+    if item.get("slot") != slot:
+        return jsonify({"error": "slot mismatch"}), 400
+    bag = [i for i in bag if i.get("id") != item_id]
+    displaced = equipped.get(slot)
+    if displaced:
+        displaced["equipped"] = False
+        bag.append(displaced)
+    item["equipped"] = True
+    equipped[slot] = item
+    s["equipped"] = equipped
+    s["bag"] = bag
+    _write_save_record(save_id, uid, s)
+    return jsonify({"ok": True, "equipped": equipped, "bag": bag})
+
+
+@app.route("/api/game/saves/<save_id>/inventory/unequip", methods=["POST"])
+def api_inventory_unequip(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    slot = body.get("slot")
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    equipped = s.get("equipped", {})
+    bag = s.get("bag", [])
+    bag_capacity = s.get("bag_capacity", 5)
+    item = equipped.get(slot)
+    if not item:
+        return jsonify({"error": "slot empty"}), 400
+    if len(bag) >= bag_capacity:
+        return jsonify({"error": "bag full"}), 400
+    item["equipped"] = False
+    bag.append(item)
+    equipped.pop(slot, None)
+    s["equipped"] = equipped
+    s["bag"] = bag
+    _write_save_record(save_id, uid, s)
+    return jsonify({"ok": True, "equipped": equipped, "bag": bag})
+
+
+@app.route("/api/game/saves/<save_id>/inventory/drop", methods=["POST"])
+def api_inventory_drop(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    item_id = body.get("item_id")
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    s["bag"] = [i for i in s.get("bag", []) if i.get("id") != item_id]
+    _write_save_record(save_id, uid, s)
+    return jsonify({"ok": True, "bag": s["bag"]})
+
+
+@app.route("/api/game/saves/<save_id>/inventory/add", methods=["POST"])
+def api_inventory_add(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    item = body.get("item")
+    if not item:
+        return jsonify({"error": "item required"}), 400
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    bag = s.get("bag", [])
+    cap = s.get("bag_capacity", 5)
+    if len(bag) >= cap:
+        return jsonify({"error": "bag full", "bag_full": True}), 400
+    bag.append(item)
+    s["bag"] = bag
+    _write_save_record(save_id, uid, s)
+    return jsonify({"ok": True, "bag": bag})
 
 
 @app.route("/api/status")
