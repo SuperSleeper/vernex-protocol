@@ -4,15 +4,18 @@
 June 6, 2026 (End of Session)
 
 ## Current Version
-v0.12.29
+v0.12.30
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ (daemon); v0.12.29 dashboard |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ (daemon); v0.12.30 dashboard |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-06)
+
+### v0.12.30 — fix word-wrap on game and chat log (dashboard)
+✅ Added `white-space:pre-wrap`, `word-wrap:break-word`, `overflow-wrap:break-word` to `.msg.assistant` and `overflow-x:hidden` to `#chat-log` in both `/ui` and `/game` templates; pre-wrap preserves ASCII art HUD line breaks while wrapping long lines at the container edge; no horizontal scrollbar
 
 ### v0.12.29 — fix save row clicks + user identity in UI + per-user saves + version fix (dashboard)
 ✅ **Fix selection screen save rows**: renamed `data-load-id` → `data-save-id`; event delegation on static containers (`sel-saves-list`, `sel-autosaves-list`) now correctly fires on dynamically rendered child rows
