@@ -1,10 +1,10 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-June 6, 2026 (End of Session)
+June 7, 2026 (End of Session)
 
 ## Current Version
-v0.12.33
+v0.12.36
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -12,7 +12,28 @@ v0.12.33
 | vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ (daemon); v0.12.33 dashboard |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
+## Recently Completed (2026-06-07)
+
+### v0.12.36 — three-layer context + compact HUD + multi-color stat bars (dashboard)
+✅ **Pre-Context 1** (universal): 2-3 line response limit, compact HUD format `[Location > Sublocation] HP:X/Y LVL:N STAT:N`, stat reference requirement, skill tracking, level-up trigger, NPC depth rules — stored as `_PRE_CONTEXT_1` Python constant
+✅ **Pre-Context 2** (per-genre): Fantasy/Sci-Fi/Action/Comedy rules with party size, group name, combined stat, opening location — stored as `_PRE_CONTEXT_2` dict; both returned via `/api/game/contexts`
+✅ **Context assembly**: `startGame()` builds `_history` as `[pre1, pre2, layer3, "Begin the adventure."]`; GAME_DATA now caches `preContext1` and `preContext2`
+✅ **buildContext() simplified**: Layer 3 now outputs only `CHARACTER / STATS / OPENING` — rules removed (now in pre-contexts 1 & 2)
+✅ **Game Context label**: updated to "Layer 3 — your custom rules" with layer note below textarea
+✅ **Multi-component stat structure**: `{base, item_bonus, skill_bonus, level_bonus, temp_penalty}` per stat; `migrateStats()` converts old flat saves; `recalcItemBonuses()` syncs item_bonus from equipped items
+✅ **effStatValue()**: handles both flat number (legacy) and new object format; `computeEffectiveStats()` simplified to delegate to it
+✅ **Stat mutation paths updated**: `handleSkillTracking()` → `skill_bonus += 1`; `showLevelUpChoice()` → `level_bonus += 2`; `rumor_spread` server handler → `temp_penalty -= 2` (with old-format fallback)
+✅ **Multi-color stat bars**: `renderStatBar()` generates CSS flex bar with blue=base, gold=item, green=skill, purple=level, red=penalty segments; bonus annotations (i/s/l suffixes) shown after stat value; replaces monochrome text block chars in character sheet
+✅ **_eff_stat() updated**: handles both flat int and new dict stat format server-side; `api_combat_start` uses `_eff_stat()` for stamina calculation
+✅ **refreshInventoryUI()**: calls `recalcItemBonuses()` before `renderCharSheet()` so item_bonus stays accurate on equip/unequip/load
+✅ **Commit**: 900ba6c — pushed to origin main
+
 ## Recently Completed (2026-06-06)
+
+### v0.12.35 — fix scroll: #view-play as scroll container (dashboard)
+✅ `adjustPadding()` sets `#view-play` height=100vh and padding-top=header_h; other views get padding-top=h+14
+✅ `scrollToBottom()` helper targets `#view-play.scrollTop = scrollHeight`; all 5 old `log.scrollTop` calls replaced
+✅ `#chat-log` has NO overflow/height constraints — grows naturally inside the scroll container
 
 ### v0.12.33 — combat system + enemy scaling + health + game over (dashboard)
 ✅ **Enemy tables**: 4 genres × 3 level tiers (L1-2/L3-4/L5-6) × 3 enemies each; boss flag; `_generate_enemy()` with named lookup, level-tier routing, UUID id; stat scaling health=lvl×8+base, strength=lvl×2+base, defense/magic_resist=lvl×1+base; boss=2× multiplier all stats

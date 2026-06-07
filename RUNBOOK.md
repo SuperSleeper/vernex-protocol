@@ -32,7 +32,7 @@ Vernex Protocol is a distributed home node compute network with a two-class toke
 | Core language | Go (node daemon) |
 | Dashboard language | Python + Flask |
 | Target hardware | Budget consumer hardware, Raspberry Pi capable |
-| Current version | v0.12.18 |
+| Current version | v0.12.36 (dashboard) / v0.12.18 (daemon) |
 
 ---
 
