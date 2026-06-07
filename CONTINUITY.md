@@ -4,15 +4,25 @@
 June 6, 2026 (End of Session)
 
 ## Current Version
-v0.12.31
+v0.12.32
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ (daemon); v0.12.31 dashboard |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ (daemon); v0.12.32 dashboard |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-06)
+
+### v0.12.32 — inventory system + artifact drops + skill progression + level up (dashboard)
+✅ **Item generation** (`POST /api/game/item/generate`): rarity roll (Common 60%/Uncommon 25%/Rare 10%/Legendary 4%/Cursed 1%); name from `[Adjective] [Noun] of [Phrase]` word lists per genre; stat_effects by rarity; cursed items appear as Uncommon with hidden `curse_effects` (applied only when `cursed_revealed`)
+✅ **Equipment slots**: 7 slots per genre (head/body/hands/feet/accessory1/accessory2/weapon) with genre-accurate display names; server-side equip/unequip/drop/add routes; bag capacity 5, enforced server-side
+✅ **Inventory UI**: Character Sheet panel expanded with stats (effective + diff annotations), XP bar, Equipped section (7 slots, Unequip buttons), Bag section (capacity counter, Equip/Drop buttons), Skills section (progress bars + rank display)
+✅ **Effective stats**: `computeEffectiveStats()` = base_stats + equipped bonuses; curse_effects added when `cursed_revealed=true`; shown in char sheet as colored +/- diff vs base; injected into LLM context on every turn via ephemeral system message (not stored in _history)
+✅ **Skill progression**: `SKILL_KEYWORDS` per genre — 4 skills each tied to a stat; keyword scan on LLM response; 5 uses → rank up → +1 to linked stat
+✅ **Level system**: XP thresholds [3,6,10,15]; +1 XP regular enemy defeat, +2 XP boss; `showLevelUpChoice()` injects level-up UI into chat log — choose 2 stats for +2 each; max level 5
+✅ **Loot drops**: `detectLootDrop()` scans LLM response for DEFEAT_KEYWORDS; boss detection for Rare/Legendary roll; bag-full prompt stores pending item until space clears
+✅ **Save/load updated**: equipped, bag, bag_capacity, level, level_xp, skill_uses, skill_ranks persisted in all save operations
 
 ### v0.12.31 — fix save/load toolbar position (dashboard)
 ✅ Moved Quicksave / Save / Load toolbar below `#chat-log` and above the model selector, so the player never needs to scroll up to save; Character Sheet collapsible stays at top; all IDs and JS functionality unchanged
