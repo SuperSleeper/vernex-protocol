@@ -681,7 +681,7 @@ body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;min-heigh
 a.hdr-link{font-size:.75rem;color:#8892a4;text-decoration:none;white-space:nowrap}
 a.hdr-link:hover{color:#e94560}
 .view-main{max-width:860px;width:100%;margin:0 auto;padding:16px}
-#view-play{display:flex;flex-direction:column;box-sizing:border-box;overflow:hidden;padding-bottom:8px}
+#view-play{overflow-y:auto;box-sizing:border-box}
 /* ── Genre selection ── */
 .sel-title{text-align:center;color:#e6edf3;font-size:1.3rem;letter-spacing:.05em;margin-bottom:6px}
 .sel-sub{text-align:center;color:#8892a4;font-size:.85rem;margin-bottom:28px}
@@ -770,7 +770,7 @@ details[open]>summary::before{transform:rotate(90deg)}
 .btn-del{background:transparent;border:1px solid #3d1a1a;color:#f85149;border-radius:4px;padding:2px 7px;font-size:.73rem;cursor:pointer}
 .btn-del:hover{background:#f85149;color:#0d1117}
 .load-empty{font-size:.8rem;color:#8892a4;padding:6px;text-align:center}
-#chat-log{flex:1;min-height:100px;display:flex;flex-direction:column;gap:10px;overflow-y:auto;overflow-x:hidden;margin-bottom:6px}
+#chat-log{display:flex;flex-direction:column;gap:10px;margin-bottom:10px}
 .msg{padding:10px 14px;border-radius:8px;word-break:break-word;word-wrap:break-word;overflow-wrap:break-word;line-height:1.55}
 .msg.user{background:#0f3460;align-self:flex-end;max-width:80%;font-size:.9rem}
 .msg.assistant{background:#0d1117;border:1px solid #1f2d45;align-self:stretch;font-family:'Courier New',monospace;font-size:.82rem;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word}

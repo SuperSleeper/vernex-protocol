@@ -114,12 +114,22 @@ function adjustPadding() {
   var hdr = document.getElementById('site-hdr');
   if (!hdr) return;
   var h = hdr.offsetHeight;
-  document.querySelectorAll('.view-main').forEach(function(el) {
-    el.style.paddingTop = (h + 14) + 'px';
+  // Non-play views: just push content below fixed header
+  ['view-select', 'view-create'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.paddingTop = (h + 14) + 'px';
   });
-  // Pin view-play to viewport height so #chat-log flex:1 has a concrete size to fill
+  // view-play: full-viewport scroll container; content starts at bottom of header
   var vp = document.getElementById('view-play');
-  if (vp) vp.style.height = window.innerHeight + 'px';
+  if (vp) {
+    vp.style.paddingTop = h + 'px';
+    vp.style.height = window.innerHeight + 'px';
+  }
+}
+
+function scrollToBottom() {
+  var vp = document.getElementById('view-play');
+  if (vp) requestAnimationFrame(function() { vp.scrollTop = vp.scrollHeight; });
 }
 
 // ── Genre selection ───────────────────────────────────────────
@@ -381,7 +391,7 @@ function appendSystemMsg(markdown) {
     ? marked.parse(markdown, {breaks: true, gfm: true})
     : markdown.replace(/\*\*/g, '').replace(/\n/g, '<br>');
   log.appendChild(div);
-  requestAnimationFrame(function() { log.scrollTop = log.scrollHeight; });
+  scrollToBottom();
 }
 
 function buildInventoryContext() {
@@ -710,7 +720,7 @@ function showLevelUpChoice(newLevel) {
     renderCharSheet();
   });
   log.appendChild(div);
-  requestAnimationFrame(function() { log.scrollTop = log.scrollHeight; });
+  scrollToBottom();
 }
 
 // ── Combat helpers ────────────────────────────────────────────
@@ -819,8 +829,7 @@ async function startCombat(enemyName) {
       _playerMaxHealth = d.player_max_health;
       updateHealthBar();
       renderCombatPanel();
-      var _log0 = document.getElementById('chat-log');
-      if (_log0) requestAnimationFrame(function() { _log0.scrollTop = _log0.scrollHeight; });
+      scrollToBottom();
       appendSystemMsg('⚔️ **Combat started!** ' + d.enemy.name
         + ' — HP: ' + d.enemy.health + '  DEF: ' + d.enemy.defense + '  MGR: ' + d.enemy.magic_resist);
     }
@@ -950,7 +959,7 @@ function showGameOver(d) {
     + '<button class="btn-sv" id="go-new">🏠 New Game</button>'
     + '</div>';
   log.appendChild(div);
-  requestAnimationFrame(function() { log.scrollTop = log.scrollHeight; });
+  scrollToBottom();
   div.querySelector('#go-load').addEventListener('click', function() { toggleLoadPanel(); div.remove(); });
   div.querySelector('#go-new').addEventListener('click', function() { resetGame(); });
 }
@@ -1011,7 +1020,7 @@ function appendMsg(role, content) {
     div.textContent = content;
   }
   log.appendChild(div);
-  requestAnimationFrame(function() { log.scrollTop = log.scrollHeight; });
+  scrollToBottom();
 }
 
 function resetGame() {
