@@ -891,6 +891,7 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
     <summary>&#128203; Character Sheet &#8212; <span id="cs-name"></span></summary>
     <div class="cs-inner" id="cs-inner"></div>
   </details>
+  <div id="chat-log"></div>
   <div class="save-toolbar">
     <button class="btn-qs" id="qs-btn" disabled>&#9889; Quicksave</button>
     <button class="btn-sv" id="sv-save-btn">&#128190; Save</button>
@@ -905,7 +906,6 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
   <div id="load-panel" class="load-panel" style="display:none">
     <div id="load-list"></div>
   </div>
-  <div id="chat-log"></div>
   <div class="input-row">
     <select id="model-select"><option value="mistral">mistral</option></select>
   </div>
