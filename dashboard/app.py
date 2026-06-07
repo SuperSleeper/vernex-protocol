@@ -612,6 +612,12 @@ _GAME_OPENINGS = {
         "American Wild West": "arriving in a frontier town, trail dust on boots, one hand resting near a holster",
         "World War II": "being briefed in a dimly lit operations room, a map spread across the table, a mission already under way",
     },
+    "comedy": {
+        "Workplace Comedy": "arriving late on their first day at a chaotic office",
+        "Small Town Chaos": "being new to a small town where everyone already knows their business",
+        "Royally Confused": "being mistaken for visiting royalty and unable to correct the misunderstanding",
+        "Superhero Farce": "discovering their superpower works — just not the way they expected",
+    },
 }
 
 _GAME_HTML = """<!DOCTYPE html>
@@ -643,6 +649,16 @@ a.hdr-link:hover{color:#e94560}
 .gc-fantasy{border-color:#5a2070}.gc-fantasy:hover{border-color:#bf5fd4;background:#1d1128}
 .gc-scifi{border-color:#1f4070}.gc-scifi:hover{border-color:#4d9ef5;background:#111d2e}
 .gc-action{border-color:#703020}.gc-action:hover{border-color:#e0863a;background:#1e1208}
+.gc-comedy{border-color:#5a4a10}.gc-comedy:hover{border-color:#d4a017;background:#1e1a08}
+/* ── Selection screen saves ── */
+.sel-saves-section{margin-top:32px;max-width:700px;margin-left:auto;margin-right:auto}
+.sel-saves-hdr{text-align:center;color:#8892a4;font-size:.85rem;letter-spacing:.04em;margin-bottom:10px}
+.sel-save-item{background:#16213e;border:1px solid #1f2d45;border-radius:8px;padding:10px 14px;cursor:pointer;display:flex;align-items:center;gap:12px;margin-bottom:6px;transition:border-color .2s}
+.sel-save-item:hover{border-color:#58a6ff}
+.sel-save-info{flex:1}
+.sel-save-name{font-size:.87rem;color:#e6edf3;font-weight:600}
+.sel-save-meta{font-size:.72rem;color:#8892a4;margin-top:2px}
+.sel-empty{text-align:center;color:#8892a4;font-size:.8rem;padding:12px 0}
 /* ── Character creator ── */
 .cc-hdr{display:flex;align-items:center;gap:12px;margin-bottom:16px}
 .cc-back{background:transparent;border:1px solid #30363d;color:#8892a4;padding:5px 12px;border-radius:5px;cursor:pointer;font-size:.8rem;font-family:inherit}
@@ -769,6 +785,17 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
       <span class="gc-icon">&#9876;&#65039;</span>
       <span class="gc-name">Action / Adventure</span>
     </div>
+    <div class="genre-card gc-comedy" data-genre="comedy">
+      <span class="gc-icon">&#127917;</span>
+      <span class="gc-name">Comedic Drama</span>
+    </div>
+  </div>
+  <!-- ══ SAVED GAMES ══ -->
+  <div class="sel-saves-section">
+    <p class="sel-saves-hdr">&#128194; Continue a Saved Game</p>
+    <div id="sel-saves-list"><div class="sel-empty">Loading saves&#8230;</div></div>
+    <p class="sel-saves-hdr" style="margin-top:20px">&#9889; Autosaves</p>
+    <div id="sel-autosaves-list"><div class="sel-empty">Loading&#8230;</div></div>
   </div>
 </main>
 
@@ -1011,6 +1038,8 @@ def api_game_saves_list():
                 "save_name": s.get("save_name", ""),
                 "genre": s.get("genre", ""),
                 "char_name": s.get("char_name", ""),
+                "subtype": s.get("subtype", ""),
+                "autosave": s.get("autosave", False),
                 "updated_at": s.get("updated_at", ""),
             })
         except Exception:

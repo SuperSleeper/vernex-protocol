@@ -9,12 +9,42 @@ var GAME_DATA = null;
 var STAT_NAMES = {
   fantasy: ['Strength','Stamina','Charisma','Magic','Agility','Luck'],
   scifi:   ['Intelligence','Tech Skill','Agility','Charisma','Endurance','Luck'],
-  action:  ['Strength','Stamina','Charisma','Cunning','Agility','Luck']
+  action:  ['Strength','Stamina','Charisma','Cunning','Agility','Luck'],
+  comedy:  ['Charisma','Wit','Luck','Clumsiness','Charm','Stubbornness']
 };
 var SUBTYPES = {
   fantasy: {lbl:'Class',    byG:true,  opts:{male:['Warrior','Elf Archer','Wizard','Thief'], female:['Valkyrie','Elf Archer','Wizard','Thief']}},
   scifi:   {lbl:'Scenario', byG:false, opts:['AI','Aliens','Space Travel','Time Travel']},
-  action:  {lbl:'Era',      byG:false, opts:['Egyptian Pharaoh Era','Roman Empire','Renaissance','American Wild West','World War II']}
+  action:  {lbl:'Era',      byG:false, opts:['Egyptian Pharaoh Era','Roman Empire','Renaissance','American Wild West','World War II']},
+  comedy:  {lbl:'Subtype',  byG:false, opts:['Workplace Comedy','Small Town Chaos','Royally Confused','Superhero Farce']}
+};
+var STAT_MODIFIERS = {
+  fantasy: {
+    'Warrior':    {Strength:2,  Stamina:2,  Charisma:-2, Magic:-2, Agility:0,  Luck:0},
+    'Valkyrie':   {Strength:2,  Stamina:2,  Charisma:-2, Magic:-2, Agility:0,  Luck:0},
+    'Elf Archer': {Strength:-2, Stamina:0,  Charisma:0,  Magic:0,  Agility:2,  Luck:2},
+    'Wizard':     {Strength:-2, Stamina:-2, Charisma:0,  Magic:2,  Agility:0,  Luck:2},
+    'Thief':      {Strength:-2, Stamina:0,  Charisma:2,  Magic:-2, Agility:2,  Luck:2}
+  },
+  scifi: {
+    'AI':           {'Intelligence':2,  'Tech Skill':2,  Agility:-2, Charisma:-2, Endurance:0,  Luck:0},
+    'Aliens':       {'Intelligence':0,  'Tech Skill':-2, Agility:2,  Charisma:0,  Endurance:2,  Luck:-2},
+    'Space Travel': {'Intelligence':0,  'Tech Skill':2,  Agility:0,  Charisma:0,  Endurance:2,  Luck:-2},
+    'Time Travel':  {'Intelligence':2,  'Tech Skill':2,  Agility:0,  Charisma:-2, Endurance:-2, Luck:0}
+  },
+  action: {
+    'Egyptian Pharaoh Era': {Strength:0,  Stamina:2,  Charisma:2,  Cunning:0,  Agility:-2, Luck:-2},
+    'Roman Empire':         {Strength:2,  Stamina:2,  Charisma:0,  Cunning:-2, Agility:0,  Luck:-2},
+    'Renaissance':          {Strength:-2, Stamina:0,  Charisma:2,  Cunning:2,  Agility:0,  Luck:-2},
+    'American Wild West':   {Strength:0,  Stamina:0,  Charisma:2,  Cunning:2,  Agility:-2, Luck:-2},
+    'World War II':         {Strength:2,  Stamina:2,  Charisma:-2, Cunning:2,  Agility:0,  Luck:-2}
+  },
+  comedy: {
+    'Workplace Comedy': {Charisma:0,  Wit:2,  Luck:-2, Clumsiness:2,  Charm:0,  Stubbornness:-2},
+    'Small Town Chaos': {Charisma:2,  Wit:0,  Luck:-2, Clumsiness:2,  Charm:-2, Stubbornness:0},
+    'Royally Confused': {Charisma:2,  Wit:2,  Luck:0,  Clumsiness:-2, Charm:0,  Stubbornness:-2},
+    'Superhero Farce':  {Charisma:-2, Wit:2,  Luck:2,  Clumsiness:0,  Charm:-2, Stubbornness:0}
+  }
 };
 
 // ── State ─────────────────────────────────────────────────────
@@ -41,7 +71,7 @@ function adjustPadding() {
 // ── Genre selection ───────────────────────────────────────────
 function selectGenre(g) {
   _genre = g;
-  var lbl = {fantasy:'Fantasy Adventure', scifi:'Science Fiction', action:'Action / Adventure'};
+  var lbl = {fantasy:'Fantasy Adventure', scifi:'Science Fiction', action:'Action / Adventure', comedy:'Comedic Drama'};
   document.getElementById('cc-genre-lbl').textContent = lbl[g] || g;
   renderSubtypeOpts();
   document.getElementById('stat-block').innerHTML = '<p class="stat-ph">Click “Roll Character” to generate stats.</p>';
@@ -90,15 +120,23 @@ function statBar(v) {
 
 function rollCharacter() {
   var names = STAT_NAMES[_genre];
+  var mods = (STAT_MODIFIERS[_genre] || {})[getSubtype()] || {};
   _rolledStats = {};
-  names.forEach(function(n) { _rolledStats[n] = roll4d6(); });
-  document.getElementById('stat-block').innerHTML = Object.keys(_rolledStats).map(function(n) {
-    return '<div class="stat-row">'
+  var html = '';
+  names.forEach(function(n) {
+    var raw = roll4d6();
+    var mod = mods[n] !== undefined ? mods[n] : 0;
+    _rolledStats[n] = Math.min(20, Math.max(1, raw + mod));
+    var modStr = mod > 0 ? ' <span style="color:#3fb950;font-size:.75rem">(+' + mod + ')</span>'
+               : mod < 0 ? ' <span style="color:#f85149;font-size:.75rem">(' + mod + ')</span>'
+               : '';
+    html += '<div class="stat-row">'
       + '<span class="stat-name">' + n + '</span>'
       + '<span class="stat-bar">' + statBar(_rolledStats[n]) + '</span>'
-      + '<span class="stat-val">&nbsp;' + _rolledStats[n] + '</span>'
+      + '<span class="stat-val">&nbsp;' + _rolledStats[n] + modStr + '</span>'
       + '</div>';
-  }).join('');
+  });
+  document.getElementById('stat-block').innerHTML = html;
   if (!document.getElementById('game-context').value.trim()) {
     document.getElementById('game-context').value = buildContext();
   }
@@ -176,6 +214,20 @@ function buildContext() {
       + '\n\n### 4. GENRE MECHANICS\nTechnology, science, gadgets. INTELLIGENCE governs problem-solving; '
       + 'TECH SKILL device operation. Track equipment (max 6). No magic — plausible science only.\n\n'
       + '### 5. OPENING MOVE\nBegin at Level 1. ' + name + ' (' + sub + ' scenario): ' + pr + ' is ' + scifiOp + '.';
+  }
+
+  if (_genre === 'comedy') {
+    ch += 'Subtype: ' + sub + '\n';
+    var comedyOp = (GAME_DATA.openings.comedy || {})[sub] || 'finding themselves in an absurd situation';
+    return 'You are a dynamic, adaptive text-adventure game engine set in a lighthearted comedic drama world.\n'
+      + 'Never break character or explain your mechanics. Tone is lighthearted situational comedy — no dark themes, PG-13 only.\n\n'
+      + ch + '\nSTAT BLOCK\n' + sb + '\n\n' + ls
+      + '\n\n### 4. GENRE MECHANICS\nLighthearted comedic drama. WIT governs wordplay and clever solutions; '
+      + 'CHARISMA social interactions; LUCK random fortune; CLUMSINESS causes comic mishaps (higher score = more frequent mishaps). '
+      + 'Replace the Status line every response with "Embarrassment Meter: [Low/Medium/High/Critical]". '
+      + 'Level escalation leads to increasingly absurd situations rather than danger. '
+      + '1% chance any response breaks into a short musical number.\n\n'
+      + '### 5. OPENING MOVE\nBegin at Level 1. ' + name + ' (' + sub + '): ' + pr + ' is ' + comedyOp + '.';
   }
 
   // action
@@ -294,6 +346,7 @@ function resetGame() {
   document.getElementById('chat-log').innerHTML = '';
   hideSaveForm(); hideLoadPanel();
   showView('view-select');
+  loadSelectionSaves();
 }
 
 // ── Save / Load ───────────────────────────────────────────────
@@ -409,6 +462,41 @@ async function deleteGame(id) {
     await fetch('/api/game/saves/' + id, {method: 'DELETE'});
     refreshSaveList();
   } catch(err) { alert('Delete failed: ' + err.message); }
+}
+
+// ── Selection screen saves ─────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderSelSaves(container, saves) {
+  if (!saves.length) { container.innerHTML = '<div class="sel-empty">No saved games yet.</div>'; return; }
+  container.innerHTML = saves.map(function(s) {
+    var dt   = s.updated_at ? s.updated_at.slice(0, 16).replace('T', ' ') : '';
+    var meta = [s.genre, s.char_name, s.subtype, dt].filter(Boolean).join(' · ');
+    return '<div class="sel-save-item" data-load-id="' + escHtml(s.save_id) + '">'
+      + '<div class="sel-save-info">'
+      + '<div class="sel-save-name">' + escHtml(s.save_name) + '</div>'
+      + '<div class="sel-save-meta">' + escHtml(meta) + '</div>'
+      + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+async function loadSelectionSaves() {
+  var regularEl = document.getElementById('sel-saves-list');
+  var autoEl    = document.getElementById('sel-autosaves-list');
+  if (!regularEl) return;
+  try {
+    var saves = await fetch('/api/game/saves').then(function(r) { return r.json(); });
+    var regular = saves.filter(function(s) { return !s.autosave; });
+    var autos   = saves.filter(function(s) { return !!s.autosave; });
+    renderSelSaves(regularEl, regular);
+    if (autoEl) renderSelSaves(autoEl, autos);
+  } catch(e) {
+    if (regularEl) regularEl.innerHTML = '<div class="sel-empty">Failed to load saves.</div>';
+    if (autoEl)    autoEl.innerHTML    = '<div class="sel-empty">—</div>';
+  }
 }
 
 // ── Models ────────────────────────────────────────────────────
@@ -527,10 +615,22 @@ function initGpuGauges() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (_gameStarted) sendTurn(e); }
   });
 
-  // Models, node info, GPU
+  // Selection screen save click handlers (event delegation)
+  ['sel-saves-list','sel-autosaves-list'].forEach(function(listId) {
+    var el = document.getElementById(listId);
+    if (el) {
+      el.addEventListener('click', function(e) {
+        var item = e.target.closest('[data-load-id]');
+        if (item) loadGame(item.getAttribute('data-load-id'));
+      });
+    }
+  });
+
+  // Models, node info, GPU, selection saves
   loadModels();
   loadNodeInfo();
   initGpuGauges();
+  loadSelectionSaves();
 
   // Layout
   adjustPadding();
