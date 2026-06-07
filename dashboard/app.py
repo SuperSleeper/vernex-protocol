@@ -462,10 +462,10 @@ header h1{font-size:1.1rem;color:#e94560;font-weight:700;letter-spacing:.05em}
 .node-info{font-size:.75rem;color:#8892a4}
 a.logout{font-size:.75rem;color:#8892a4;text-decoration:none}
 main{flex:1;min-height:0;max-width:800px;width:100%;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
-#chat-log{flex:1;min-height:160px;display:flex;flex-direction:column;gap:10px;overflow-y:auto}
-.msg{padding:10px 14px;border-radius:8px;max-width:85%;line-height:1.5;word-break:break-word}
+#chat-log{flex:1;min-height:160px;display:flex;flex-direction:column;gap:10px;overflow-y:auto;overflow-x:hidden}
+.msg{padding:10px 14px;border-radius:8px;max-width:85%;line-height:1.5;word-break:break-word;word-wrap:break-word;overflow-wrap:break-word}
 .msg.user{background:#0f3460;align-self:flex-end}
-.msg.assistant{background:#16213e;border:1px solid #0f3460;align-self:flex-start;white-space:pre-wrap}
+.msg.assistant{background:#16213e;border:1px solid #0f3460;align-self:flex-start;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word}
 .msg.error{background:#3d0f1a;border:1px solid #e94560;align-self:flex-start}
 form{display:flex;flex-direction:column;gap:8px}
 .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -763,10 +763,10 @@ details[open]>summary::before{transform:rotate(90deg)}
 .btn-del{background:transparent;border:1px solid #3d1a1a;color:#f85149;border-radius:4px;padding:2px 7px;font-size:.73rem;cursor:pointer}
 .btn-del:hover{background:#f85149;color:#0d1117}
 .load-empty{font-size:.8rem;color:#8892a4;padding:6px;text-align:center}
-#chat-log{display:flex;flex-direction:column;gap:10px;min-height:220px;overflow-y:auto;margin-bottom:10px}
-.msg{padding:10px 14px;border-radius:8px;word-break:break-word;line-height:1.55}
+#chat-log{display:flex;flex-direction:column;gap:10px;min-height:220px;overflow-y:auto;overflow-x:hidden;margin-bottom:10px}
+.msg{padding:10px 14px;border-radius:8px;word-break:break-word;word-wrap:break-word;overflow-wrap:break-word;line-height:1.55}
 .msg.user{background:#0f3460;align-self:flex-end;max-width:80%;font-size:.9rem}
-.msg.assistant{background:#0d1117;border:1px solid #1f2d45;align-self:stretch;font-family:'Courier New',monospace;font-size:.82rem}
+.msg.assistant{background:#0d1117;border:1px solid #1f2d45;align-self:stretch;font-family:'Courier New',monospace;font-size:.82rem;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word}
 .msg.assistant h1,.msg.assistant h2,.msg.assistant h3{color:#58a6ff;margin:.5em 0 .25em;font-size:.95rem}
 .msg.assistant p{margin:.35em 0}
 .msg.assistant pre{background:#161b22;padding:8px 10px;border-radius:4px;overflow-x:auto;white-space:pre;margin:.4em 0;border:1px solid #30363d;font-family:'Courier New',monospace;font-size:.8rem;line-height:1.4}
