@@ -4,15 +4,27 @@
 June 6, 2026 (End of Session)
 
 ## Current Version
-v0.12.32
+v0.12.33
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ (daemon); v0.12.32 dashboard |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ (daemon); v0.12.33 dashboard |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-06)
+
+### v0.12.33 — combat system + enemy scaling + health + game over (dashboard)
+✅ **Enemy tables**: 4 genres × 3 level tiers (L1-2/L3-4/L5-6) × 3 enemies each; boss flag; `_generate_enemy()` with named lookup, level-tier routing, UUID id; stat scaling health=lvl×8+base, strength=lvl×2+base, defense/magic_resist=lvl×1+base; boss=2× multiplier all stats
+✅ **5 combat routes**: `POST /api/game/saves/<id>/combat/start` (generates+saves enemy_state, inits player health); `POST /combat/attack` (physical/magic/skill with quality bonus, enemy counter-attack, special abilities); `POST /combat/flee` (60% success, damage on fail); `GET /combat/state`; `POST /api/game/combat/skill-quality` (LLM rates move text 1-4)
+✅ **Special abilities**: fire_breath (full enemy.strength dmg, bypasses defense), mind_control (skip_next_turn flag), rumor_spread (Charisma/Charm -2), power_malfunction (skill_disabled_turns=2), call_reinforcements (narrative note); triggered every `special_cooldown` rounds
+✅ **Player health**: `max_health = stamina_stat × 2` (Stamina/Endurance/Stubbornness per genre); initialized on game start, server-persisted; `_eff_stat()` server-side helper accounts for equipped item bonuses
+✅ **Combat panel UI**: injected between chat-log and sv-form when in combat; enemy HP bar with DEF/MGR; [⚔️ Physical][✨ Magic][🎯 Skill][🏃 Flee] buttons; skill text input shows on toggle; LLM rates skill quality before resolving; panel removed on combat end
+✅ **Health bar in toolbar**: permanent ❤️ HP bar between toolbar-gap and model selector; hidden until game starts; color: green >50%, amber >25%, red ≤25%
+✅ **Combat detection**: `detectCombatStart()` scans LLM responses for 14 trigger words (attacks/charges/lunges/etc.) + enemy name patterns per genre; auto-calls `startCombat()` if not already in combat
+✅ **Game over screen**: styled block appended to chat-log when player_health=0; shows char name/level/enemies defeated; Load Save + New Game buttons
+✅ **Save/load updated**: current_health, max_health, in_combat, enemy_state, enemies_defeated, bosses_defeated all persisted; combat panel restored on load if in_combat
+✅ **LLM context updated**: `buildInventoryContext()` appends Health and IN COMBAT state so the model knows current battle
 
 ### v0.12.32 — inventory system + artifact drops + skill progression + level up (dashboard)
 ✅ **Item generation** (`POST /api/game/item/generate`): rarity roll (Common 60%/Uncommon 25%/Rare 10%/Legendary 4%/Cursed 1%); name from `[Adjective] [Noun] of [Phrase]` word lists per genre; stat_effects by rarity; cursed items appear as Uncommon with hidden `curse_effects` (applied only when `cursed_revealed`)
