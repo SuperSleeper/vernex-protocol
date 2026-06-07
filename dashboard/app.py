@@ -747,6 +747,8 @@ details[open]>summary::before{transform:rotate(90deg)}
 .cs-inner{display:block;padding-top:6px;font-family:'Courier New',monospace}
 .cs-stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 14px}
 .save-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.play-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.play-toolbar .toolbar-gap{flex:1}
 .btn-qs{background:#1a2e0f;color:#3fb950;border:1px solid #3fb950;border-radius:5px;padding:5px 11px;font-size:.77rem;cursor:pointer;font-family:inherit}
 .btn-qs:hover:not(:disabled){background:#3fb950;color:#0d1117}
 .btn-qs:disabled{opacity:.4;cursor:not-allowed}
@@ -902,15 +904,6 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
     <button class="btn-roll" id="roll-btn">&#127922; Roll Character</button>
     <button class="btn-start" id="start-game-btn" disabled>&#9654; Start Game</button>
   </div>
-  <details>
-    <summary>&#9881; Game Context</summary>
-    <textarea id="game-context" class="ctx-ta" spellcheck="false"></textarea>
-    <div class="ctx-btns">
-      <button class="btn-ctx" id="ctx-save-btn">&#128190; Save as Default</button>
-      <button class="btn-ctx" id="ctx-reset-btn">&#8635; Reset to Default</button>
-      <span id="ctx-st" class="ctx-st"></span>
-    </div>
-  </details>
 </main>
 
 <!-- ══ GAMEPLAY ══ -->
@@ -920,12 +913,6 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
     <div class="cs-inner" id="cs-inner"></div>
   </details>
   <div id="chat-log"></div>
-  <div class="save-toolbar">
-    <button class="btn-qs" id="qs-btn" disabled>&#9889; Quicksave</button>
-    <button class="btn-sv" id="sv-save-btn">&#128190; Save</button>
-    <button class="btn-sv" id="sv-load-btn">&#128194; Load</button>
-    <span id="sv-st" class="sv-st"></span>
-  </div>
   <div id="sv-form" class="sv-form" style="display:none">
     <input type="text" id="sv-name-inp" class="sv-inp" placeholder="Save name&#8230;">
     <button class="btn-sv" id="sv-confirm-btn">Save</button>
@@ -934,7 +921,12 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
   <div id="load-panel" class="load-panel" style="display:none">
     <div id="load-list"></div>
   </div>
-  <div class="input-row">
+  <div class="play-toolbar">
+    <button class="btn-qs" id="qs-btn" disabled>&#9889; Quicksave</button>
+    <button class="btn-sv" id="sv-save-btn">&#128190; Save</button>
+    <button class="btn-sv" id="sv-load-btn">&#128194; Load</button>
+    <span id="sv-st" class="sv-st"></span>
+    <div class="toolbar-gap"></div>
     <select id="model-select"><option value="mistral">mistral</option></select>
   </div>
   <textarea id="prompt" placeholder="What do you do?" disabled></textarea>
@@ -942,6 +934,15 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
     <button class="btn-send" id="submit-btn" disabled>Send</button>
     <button class="btn-reset" id="reset-game-btn">&#128260; Reset Game</button>
   </div>
+  <details style="margin-top:12px">
+    <summary>&#9881; Game Context</summary>
+    <textarea id="game-context" class="ctx-ta" spellcheck="false"></textarea>
+    <div class="ctx-btns">
+      <button class="btn-ctx" id="ctx-save-btn">&#128190; Save as Default</button>
+      <button class="btn-ctx" id="ctx-reset-btn">&#8635; Reset to Default</button>
+      <span id="ctx-st" class="ctx-st"></span>
+    </div>
+  </details>
 </main>
 
 <script src="/static/game.js"></script>

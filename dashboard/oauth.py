@@ -287,7 +287,7 @@ def auth_complete():
 
     role = user.get("role", "user")
     cookie_val = _make_cookie(email, role, cfg.get("session_secret", ""))
-    next_url = "/" if role == "admin" else "/ui"
+    next_url = "/"
     resp = make_response(redirect(next_url))
     resp.set_cookie(
         _COOKIE_NAME, cookie_val,

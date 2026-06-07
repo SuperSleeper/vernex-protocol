@@ -519,34 +519,49 @@ function renderCharSheet() {
 }
 
 // ── Inventory actions ─────────────────────────────────────────
+async function refreshInventoryUI() {
+  if (_currentSaveId) {
+    try {
+      var r = await fetch('/api/game/saves/' + _currentSaveId + '/inventory');
+      var d = await r.json();
+      if (!d.error) {
+        _inventory.equipped = d.equipped || {};
+        _inventory.bag = d.bag || [];
+        _inventory.bag_capacity = d.bag_capacity || 5;
+      }
+    } catch(e) {}
+  }
+  renderCharSheet();
+}
+
 async function doEquip(itemId, slot) {
-  if (!_currentSaveId) return;
+  if (!_currentSaveId) { appendSystemMsg('Save your game first to equip items.'); return; }
   try {
     var r = await fetch('/api/game/saves/' + _currentSaveId + '/inventory/equip', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({item_id: itemId, slot: slot})
     });
     var d = await r.json();
-    if (d.ok) { _inventory.equipped = d.equipped; _inventory.bag = d.bag; renderCharSheet(); }
+    if (d.ok) { await refreshInventoryUI(); }
     else appendSystemMsg('Could not equip: ' + (d.error || 'error'));
   } catch(e) {}
 }
 
 async function doUnequip(slot) {
-  if (!_currentSaveId) return;
+  if (!_currentSaveId) { appendSystemMsg('Save your game first to manage equipment.'); return; }
   try {
     var r = await fetch('/api/game/saves/' + _currentSaveId + '/inventory/unequip', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({slot: slot})
     });
     var d = await r.json();
-    if (d.ok) { _inventory.equipped = d.equipped; _inventory.bag = d.bag; renderCharSheet(); }
+    if (d.ok) { await refreshInventoryUI(); }
     else appendSystemMsg(d.error === 'bag full' ? 'Bag is full — drop an item first.' : 'Could not unequip: ' + (d.error || 'error'));
   } catch(e) {}
 }
 
 async function doDrop(itemId) {
-  if (!_currentSaveId) return;
+  if (!_currentSaveId) { appendSystemMsg('Save your game first to manage items.'); return; }
   try {
     var r = await fetch('/api/game/saves/' + _currentSaveId + '/inventory/drop', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -554,8 +569,7 @@ async function doDrop(itemId) {
     });
     var d = await r.json();
     if (d.ok) {
-      _inventory.bag = d.bag;
-      renderCharSheet();
+      await refreshInventoryUI();
       if (_pendingLootItem) { var it = _pendingLootItem; _pendingLootItem = null; addItemToBag(it); }
     }
   } catch(e) {}
@@ -572,8 +586,7 @@ async function addItemToBag(item) {
       });
       var d = await r.json();
       if (d.ok) {
-        _inventory.bag = d.bag;
-        renderCharSheet();
+        await refreshInventoryUI();
         appendSystemMsg('⚔️ **Loot:** ' + item.name + (fx ? ' [' + fx + ']' : '') + ' added to bag.');
         return;
       } else if (d.bag_full) {
@@ -584,7 +597,7 @@ async function addItemToBag(item) {
     } catch(e) {}
   }
   _inventory.bag.push(item);
-  renderCharSheet();
+  await refreshInventoryUI();
   appendSystemMsg('⚔️ **Loot:** ' + item.name + (fx ? ' [' + fx + ']' : '') + ' added to bag.');
 }
 
