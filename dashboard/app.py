@@ -51,7 +51,7 @@ def get_nodes() -> dict:
         _peers_last_fetch = now
         return dict(nodes)
 
-def _get_daemon_version(fallback: str = "v0.12.33") -> str:
+def _get_daemon_version(fallback: str = "v0.12.36") -> str:
     try:
         r = requests.get(f"{LOCAL_URL}/status", timeout=2, verify=False)
         v = r.json().get("version", "")
@@ -663,6 +663,60 @@ _GAME_OPENINGS = {
     },
 }
 
+_PRE_CONTEXT_1 = """\
+UNIVERSAL GAME RULES (follow strictly on every turn):
+- Responses must be 2-3 lines maximum — never exceed this. Brevity keeps engagement high.
+- HUD format (single line, mandatory every response): [Location > Sublocation] HP:X/Y LVL:N STAT:N
+- Reference at least one character stat naturally in every response (e.g. "Your Charisma of 18 makes the guard hesitate").
+- Track skill expression quality 1-4 silently. Every 5 quality uses of the same skill: announce stat +1 increase.
+- Every 5 total stat increases: trigger level up. Announce it clearly.
+- NPCs gain depth ONLY when player shows direct interest. Start shallow, build slowly over interactions.
+- Maintain strict consistency — never forget established items, NPCs, stats, or locations.
+- Items equipped always affect stats in combat and skill checks.
+- Enemy stats scale with player level.
+- Examples of natural stat references:
+  "Your Strength of 14 lets you force the door open easily."
+  "Your low Agility of 6 means the guard spots you before you can hide."
+  "With Charisma at 18, the merchant offers you a better price."\
+"""
+
+_PRE_CONTEXT_2 = {
+    "fantasy": """\
+FANTASY RULES:
+- Magic is a core mechanic. Spells, potions, and enchanted items are always relevant.
+- Incantations improve with rhyme quality — better rhymes produce stronger spell effects.
+- Party capacity: up to 4 members. Group name: Party.
+- Group combined stat: Magic + Strength.
+- Warrior/Valkyrie offsets Wizard magic weakness. Elf Archer offsets Stamina weakness.
+- Character wakes in a medieval village, forest clearing, or inn.\
+""",
+    "scifi": """\
+SCI-FI RULES:
+- Technology and science are core mechanics. Hacking, gadgets, and ship systems matter.
+- Logic arguments and technical commands improve with precision and accuracy.
+- Crew capacity: up to 4 members. Group name: Crew.
+- Group combined stat: Intelligence + Tech Skill.
+- Opening varies by subtype: AI=lab, Aliens=first contact, Space=aboard ship, Time=moment of displacement.\
+""",
+    "action": """\
+ACTION/ADVENTURE RULES:
+- Era-accurate language and items are mandatory. No anachronisms under any circumstances.
+- Oratory, speeches, and bluffs improve with passion and confidence.
+- Platoon capacity: up to 6 members. Group name: Platoon/Squad.
+- Group combined stat: Strength + Cunning.
+- Era starting locations: Egyptian=Nile, Roman=Forum, Renaissance=city-state, Wild West=frontier town, WWII=frontline or resistance safe house.\
+""",
+    "comedy": """\
+COMEDIC DRAMA RULES:
+- Tone must always remain lighthearted. No dark themes. PG-13 only.
+- Replace Status line with: Embarrassment Meter: [Low/Medium/High/Critical]
+- Excuses and improvisations improve with creativity and absurdity.
+- Ensemble capacity: up to 4 members. Group name: Ensemble.
+- Group combined stat: Wit + Charisma.
+- Escalate toward increasingly absurd situations as levels increase.\
+""",
+}
+
 _GAME_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -722,6 +776,8 @@ a.hdr-link:hover{color:#e94560}
 .stat-row{display:flex;align-items:center;gap:7px;padding:2px 0}
 .stat-name{width:94px;color:#8892a4;text-transform:uppercase;letter-spacing:.04em;font-size:.68rem;white-space:nowrap}
 .stat-bar{color:#3fb950;letter-spacing:1px;font-size:.82rem}
+.cs-mbar{display:flex;height:7px;width:120px;background:#161b22;border-radius:2px;overflow:hidden;flex-shrink:0}
+.ctx-note{font-size:.68rem;color:#5a6a7e;margin-top:3px;font-style:italic}
 .stat-val{color:#e6edf3;font-weight:bold;font-size:.82rem;min-width:18px}
 .stat-ph{color:#3d4d5e;font-size:.78rem;font-style:italic;padding:6px 0}
 .cc-actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
@@ -957,8 +1013,9 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
     <div class="cs-inner" id="cs-inner"></div>
   </details>
   <details style="margin-top:4px">
-    <summary>&#9881; Game Context</summary>
+    <summary>&#9881; Game Context (Layer 3 &#8212; your custom rules)</summary>
     <textarea id="game-context" class="ctx-ta" spellcheck="false"></textarea>
+    <div class="ctx-note">Layers 1 &amp; 2 (universal + genre rules) are applied automatically above this.</div>
     <div class="ctx-btns">
       <button class="btn-ctx" id="ctx-save-btn">&#128190; Save as Default</button>
       <button class="btn-ctx" id="ctx-reset-btn">&#8635; Reset to Default</button>
@@ -987,6 +1044,8 @@ def api_game_contexts():
     return jsonify({
         "levelSystem": _GAME_LEVEL_SYSTEM,
         "openings": _GAME_OPENINGS,
+        "preContext1": _PRE_CONTEXT_1,
+        "preContext2": _PRE_CONTEXT_2,
     })
 
 
@@ -1413,11 +1472,18 @@ def _generate_enemy(genre: str, level: int, enemy_name: str = None) -> dict:
 
 
 def _eff_stat(stats: dict, equipped: dict, stat_name: str) -> int:
-    base = stats.get(stat_name, 5)
-    for item in equipped.values():
-        if item:
-            base += item.get('stat_effects', {}).get(stat_name, 0)
-    return max(1, base)
+    raw = stats.get(stat_name, 5)
+    if isinstance(raw, dict):
+        # New multi-component format: item_bonus already computed client-side
+        val = (raw.get('base', 0) + raw.get('item_bonus', 0) +
+               raw.get('skill_bonus', 0) + raw.get('level_bonus', 0) +
+               raw.get('temp_penalty', 0))
+    else:
+        val = int(raw) if raw is not None else 5
+        for item in equipped.values():
+            if item:
+                val += item.get('stat_effects', {}).get(stat_name, 0)
+    return max(1, val)
 
 
 def _save_path(save_id: str, user_id: str = "guest") -> str:
@@ -1631,7 +1697,7 @@ def api_combat_start(save_id):
     enemy = _generate_enemy(genre, level, body.get("enemy_name"))
     stats = s.get("stats", {})
     stamina_key = _STAMINA_STAT.get(genre, "Stamina")
-    max_hp = max(10, stats.get(stamina_key, 10) * 2)
+    max_hp = max(10, _eff_stat(stats, s.get("equipped", {}), stamina_key) * 2)
     s.setdefault("max_health", max_hp)
     s.setdefault("current_health", s["max_health"])
     s["enemy_state"] = enemy
@@ -1706,7 +1772,12 @@ def api_combat_attack(save_id):
                 e_dmg = 0
             elif special == "rumor_spread":
                 ch_key = "Charm" if genre == "comedy" else "Charisma"
-                stats[ch_key] = max(1, stats.get(ch_key, 5) - 2)
+                stat_val = stats.get(ch_key, 5)
+                if isinstance(stat_val, dict):
+                    stat_val['temp_penalty'] = stat_val.get('temp_penalty', 0) - 2
+                    stats[ch_key] = stat_val
+                else:
+                    stats[ch_key] = max(1, int(stat_val) - 2)
                 s["stats"] = stats
             elif special == "power_malfunction":
                 s["skill_disabled_turns"] = 2

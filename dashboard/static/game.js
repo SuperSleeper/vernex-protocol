@@ -182,6 +182,71 @@ function statBar(v) {
   return '█'.repeat(f) + '░'.repeat(8 - f);
 }
 
+function effStatValue(statObj) {
+  if (typeof statObj !== 'object' || statObj === null) return Math.min(20, Math.max(1, statObj || 0));
+  return Math.min(20, Math.max(1,
+    (statObj.base || 0) + (statObj.item_bonus || 0) +
+    (statObj.skill_bonus || 0) + (statObj.level_bonus || 0) +
+    (statObj.temp_penalty || 0)
+  ));
+}
+
+function migrateStats(stats) {
+  if (!stats) return {};
+  var out = {};
+  Object.keys(stats).forEach(function(n) {
+    var v = stats[n];
+    if (typeof v === 'object' && v !== null && 'base' in v) {
+      out[n] = v;
+    } else {
+      out[n] = {base: Math.min(20, Math.max(1, Number(v) || 1)), item_bonus: 0, skill_bonus: 0, level_bonus: 0, temp_penalty: 0};
+    }
+  });
+  return out;
+}
+
+function recalcItemBonuses() {
+  if (!_character) return;
+  Object.keys(_character.stats).forEach(function(n) {
+    var s = _character.stats[n];
+    if (typeof s === 'object' && s !== null) { s.item_bonus = 0; }
+  });
+  Object.keys(_inventory.equipped || {}).forEach(function(slot) {
+    var item = _inventory.equipped[slot];
+    if (!item) return;
+    Object.keys(item.stat_effects || {}).forEach(function(n) {
+      var s = _character.stats[n];
+      if (s && typeof s === 'object') s.item_bonus = (s.item_bonus || 0) + item.stat_effects[n];
+    });
+    if (item.cursed && item.cursed_revealed) {
+      Object.keys(item.curse_effects || {}).forEach(function(n) {
+        var s = _character.stats[n];
+        if (s && typeof s === 'object') s.temp_penalty = (s.temp_penalty || 0) + item.curse_effects[n];
+      });
+    }
+  });
+}
+
+function renderStatBar(statObj) {
+  var W = 120;
+  function px(v) { return Math.round(Math.min(20, Math.max(0, v)) / 20 * W); }
+  var base, item, skill, level, penalty;
+  if (typeof statObj !== 'object' || statObj === null) {
+    base = Math.min(20, Math.max(0, Number(statObj) || 0)); item = 0; skill = 0; level = 0; penalty = 0;
+  } else {
+    base = Math.max(0, statObj.base || 0); item = Math.max(0, statObj.item_bonus || 0);
+    skill = Math.max(0, statObj.skill_bonus || 0); level = Math.max(0, statObj.level_bonus || 0);
+    penalty = Math.min(0, statObj.temp_penalty || 0);
+  }
+  var segs = '';
+  if (base > 0)  segs += '<div style="width:' + px(base)  + 'px;background:#4a9eff;height:100%;flex-shrink:0"></div>';
+  if (item > 0)  segs += '<div style="width:' + px(item)  + 'px;background:#f0a500;height:100%;flex-shrink:0"></div>';
+  if (skill > 0) segs += '<div style="width:' + px(skill) + 'px;background:#4caf50;height:100%;flex-shrink:0"></div>';
+  if (level > 0) segs += '<div style="width:' + px(level) + 'px;background:#9c6bda;height:100%;flex-shrink:0"></div>';
+  if (penalty < 0) segs += '<div style="width:' + px(-penalty) + 'px;background:#e05252;height:100%;flex-shrink:0;opacity:.85"></div>';
+  return '<div class="cs-mbar">' + segs + '</div>';
+}
+
 function rollCharacter() {
   var names = STAT_NAMES[_genre];
   var mods = (STAT_MODIFIERS[_genre] || {})[getSubtype()] || {};
@@ -190,14 +255,15 @@ function rollCharacter() {
   names.forEach(function(n) {
     var raw = roll4d6();
     var mod = mods[n] !== undefined ? mods[n] : 0;
-    _rolledStats[n] = Math.min(20, Math.max(1, raw + mod));
+    var base = Math.min(20, Math.max(1, raw + mod));
+    _rolledStats[n] = {base: base, item_bonus: 0, skill_bonus: 0, level_bonus: 0, temp_penalty: 0};
     var modStr = mod > 0 ? ' <span style="color:#3fb950;font-size:.75rem">(+' + mod + ')</span>'
                : mod < 0 ? ' <span style="color:#f85149;font-size:.75rem">(' + mod + ')</span>'
                : '';
     html += '<div class="stat-row">'
       + '<span class="stat-name">' + n + '</span>'
-      + '<span class="stat-bar">' + statBar(_rolledStats[n]) + '</span>'
-      + '<span class="stat-val">&nbsp;' + _rolledStats[n] + modStr + '</span>'
+      + renderStatBar(_rolledStats[n])
+      + '<span class="stat-val">&nbsp;' + base + modStr + '</span>'
       + '</div>';
   });
   document.getElementById('stat-block').innerHTML = html;
@@ -244,66 +310,23 @@ function showCtxStatus(m) {
 }
 
 // ── Context generation ────────────────────────────────────────
-function sbLines() {
-  return Object.keys(_rolledStats).map(function(n) {
-    return (n + '              ').slice(0, 14) + statBar(_rolledStats[n]) + ' ' + _rolledStats[n];
-  }).join('\n');
-}
-
 function buildContext() {
   if (!GAME_DATA) return '';
   var name = document.getElementById('char-name').value.trim() || 'the adventurer';
   var gender = getGender(), sub = getSubtype();
   var pr = gender === 'male' ? 'He' : 'She';
-  var sb = sbLines(), ls = GAME_DATA.levelSystem;
-  var ch = 'CHARACTER\nName:   ' + name + '\nGender: ' + gender + '\n';
-
-  if (_genre === 'fantasy') {
-    ch += 'Class:  ' + sub + '\n';
-    return 'You are a dynamic, adaptive text-adventure game engine set in a classic fantasy world.\n'
-      + 'Never break character or explain your mechanics.\n\n'
-      + ch + '\nSTAT BLOCK\n' + sb + '\n\n' + ls
-      + '\n\n### 4. GENRE MECHANICS\nSpells, potions, enchanted items. MAGIC governs spell power; '
-      + 'STRENGTH melee; AGILITY stealth. Track inventory (max 6 items). Medieval fantasy — no modern technology.\n\n'
-      + '### 5. OPENING MOVE\nBegin at Level 1. ' + name + ' (' + sub + ') wakes '
-      + GAME_DATA.openings.fantasy + '.';
-  }
-
-  if (_genre === 'scifi') {
-    ch += 'Scenario: ' + sub + '\n';
-    var scifiOp = GAME_DATA.openings.scifi[sub] || 'waking in an unfamiliar technological environment';
-    return 'You are a dynamic, adaptive text-adventure game engine set in a science fiction universe.\n'
-      + 'Never break character or explain your mechanics.\n\n'
-      + ch + '\nSTAT BLOCK\n' + sb + '\n\n' + ls
-      + '\n\n### 4. GENRE MECHANICS\nTechnology, science, gadgets. INTELLIGENCE governs problem-solving; '
-      + 'TECH SKILL device operation. Track equipment (max 6). No magic — plausible science only.\n\n'
-      + '### 5. OPENING MOVE\nBegin at Level 1. ' + name + ' (' + sub + ' scenario): ' + pr + ' is ' + scifiOp + '.';
-  }
-
-  if (_genre === 'comedy') {
-    ch += 'Subtype: ' + sub + '\n';
-    var comedyOp = (GAME_DATA.openings.comedy || {})[sub] || 'finding themselves in an absurd situation';
-    return 'You are a dynamic, adaptive text-adventure game engine set in a lighthearted comedic drama world.\n'
-      + 'Never break character or explain your mechanics. Tone is lighthearted situational comedy — no dark themes, PG-13 only.\n\n'
-      + ch + '\nSTAT BLOCK\n' + sb + '\n\n' + ls
-      + '\n\n### 4. GENRE MECHANICS\nLighthearted comedic drama. WIT governs wordplay and clever solutions; '
-      + 'CHARISMA social interactions; LUCK random fortune; CLUMSINESS causes comic mishaps (higher score = more frequent mishaps). '
-      + 'Replace the Status line every response with "Embarrassment Meter: [Low/Medium/High/Critical]". '
-      + 'Level escalation leads to increasingly absurd situations rather than danger. '
-      + '1% chance any response breaks into a short musical number.\n\n'
-      + '### 5. OPENING MOVE\nBegin at Level 1. ' + name + ' (' + sub + '): ' + pr + ' is ' + comedyOp + '.';
-  }
-
-  // action
-  ch += 'Era:    ' + sub + '\n';
-  var actionOp = GAME_DATA.openings.action[sub] || 'finding themselves at the heart of a historical moment';
-  return 'You are a dynamic, adaptive text-adventure game engine set in a historical action-adventure world.\n'
-    + 'Never break character or explain your mechanics.\n\n'
-    + ch + '\nSTAT BLOCK\n' + sb + '\n\n' + ls
-    + '\n\n### 4. GENRE MECHANICS\nCombat, diplomacy, survival. All items and language MUST be era-accurate for "'
-    + sub + '". STRENGTH governs physical; CUNNING strategy/deception; CHARISMA social. '
-    + 'Track equipment (max 6). PG-13 only.\n\n'
-    + '### 5. OPENING MOVE\nBegin at Level 1. ' + name + ' in the ' + sub + ' era: ' + pr + ' is ' + actionOp + '.';
+  var statLines = Object.keys(_rolledStats).map(function(n) {
+    var s = _rolledStats[n];
+    return n + ': ' + (typeof s === 'object' ? s.base : s);
+  }).join(', ');
+  var opening = '';
+  if (_genre === 'fantasy') opening = GAME_DATA.openings.fantasy;
+  else if (_genre === 'scifi') opening = (GAME_DATA.openings.scifi || {})[sub] || '';
+  else if (_genre === 'action') opening = (GAME_DATA.openings.action || {})[sub] || '';
+  else if (_genre === 'comedy') opening = (GAME_DATA.openings.comedy || {})[sub] || '';
+  return 'CHARACTER: ' + name + ', ' + gender + ', ' + sub
+    + '\nSTATS: ' + statLines
+    + (opening ? '\nOPENING: ' + pr + ' begins by ' + opening + '.' : '');
 }
 
 // ── Game start ────────────────────────────────────────────────
@@ -312,20 +335,27 @@ async function startGame() {
   var name = document.getElementById('char-name').value.trim() || 'the adventurer';
   _character = {
     genre: _genre, name: name, gender: getGender(),
-    subtype: getSubtype(), stats: _rolledStats
+    subtype: getSubtype(), stats: migrateStats(_rolledStats)
   };
   _inventory = {equipped: {}, bag: [], bag_capacity: 5};
   _level = 1; _levelXp = 0; _skillUses = {}; _skillRanks = {};
   _pendingLootItem = null;
+  recalcItemBonuses();
   _playerMaxHealth = computeMaxHealth();
   _playerHealth = _playerMaxHealth;
   _inCombat = false; _combatEnemy = null;
   _enemiesDefeated = 0; _bossesDefeated = 0;
   removeCombatPanel(); updateHealthBar();
-  var ctx = document.getElementById('game-context').value.trim() || buildContext();
+  var layer3 = document.getElementById('game-context').value.trim() || buildContext();
+  var pre1 = (GAME_DATA && GAME_DATA.preContext1) || '';
+  var pre2 = (GAME_DATA && GAME_DATA.preContext2 && GAME_DATA.preContext2[_genre]) || '';
+  var sysMsgs = [];
+  if (pre1) sysMsgs.push({role:'system', content:pre1});
+  if (pre2) sysMsgs.push({role:'system', content:pre2});
+  if (layer3) sysMsgs.push({role:'system', content:layer3});
   renderCharSheet();
   showView('view-play');
-  _history = [{role:'system', content:ctx}, {role:'user', content:'Begin the adventure.'}];
+  _history = sysMsgs.concat([{role:'user', content:'Begin the adventure.'}]);
   var log = document.getElementById('chat-log');
   log.innerHTML = '';
   document.getElementById('prompt').disabled = true;
@@ -350,18 +380,8 @@ async function startGame() {
 function computeEffectiveStats() {
   if (!_character) return {};
   var eff = {};
-  Object.keys(_character.stats).forEach(function(s) { eff[s] = _character.stats[s]; });
-  Object.keys(_inventory.equipped || {}).forEach(function(slot) {
-    var item = _inventory.equipped[slot];
-    if (!item) return;
-    Object.keys(item.stat_effects || {}).forEach(function(s) {
-      if (eff.hasOwnProperty(s)) eff[s] = Math.min(20, Math.max(1, eff[s] + item.stat_effects[s]));
-    });
-    if (item.cursed && item.cursed_revealed) {
-      Object.keys(item.curse_effects || {}).forEach(function(s) {
-        if (eff.hasOwnProperty(s)) eff[s] = Math.min(20, Math.max(1, eff[s] + item.curse_effects[s]));
-      });
-    }
+  Object.keys(_character.stats).forEach(function(s) {
+    eff[s] = effStatValue(_character.stats[s]);
   });
   return eff;
 }
@@ -400,16 +420,17 @@ function buildInventoryContext() {
   var equipped = _inventory.equipped || {};
   var bag = _inventory.bag || [];
   var slotNames = SLOT_NAMES[_character.genre] || SLOT_NAMES['fantasy'];
-  var hasEquipped = Object.keys(equipped).length > 0;
-  if (!hasEquipped && !bag.length && _level === 1) return '';
 
   var lines = ['\n\n### CURRENT CHARACTER STATE'];
   var xpNeed = XP_THRESHOLDS[Math.min(_level - 1, XP_THRESHOLDS.length - 1)] || 15;
   lines.push('Level: ' + _level + '  XP: ' + _levelXp + '/' + xpNeed);
 
-  lines.push('\nEffective Stats (base + equipment bonuses):');
+  lines.push('\nEffective Stats:');
   Object.keys(_character.stats).forEach(function(s) {
-    var base = _character.stats[s], effVal = eff[s], diff = effVal - base;
+    var statObj = _character.stats[s];
+    var base = typeof statObj === 'object' ? (statObj.base || 0) : statObj;
+    var effVal = eff[s];
+    var diff = effVal - base;
     lines.push('  ' + s + ': ' + effVal + (diff !== 0 ? ' (base ' + base + (diff > 0 ? ' +' : ' ') + diff + ')' : ''));
   });
 
@@ -462,14 +483,19 @@ function renderCharSheet() {
 
   var html = '<div class="cs-stat-grid">';
   Object.keys(_character.stats).forEach(function(n) {
-    var base = _character.stats[n], effVal = eff[n], diff = effVal - base;
-    var diffStr = diff !== 0
-      ? ' <span style="color:' + (diff > 0 ? '#3fb950' : '#f85149') + '">' + (diff > 0 ? '+' : '') + diff + '</span>'
-      : '';
+    var statObj = _character.stats[n];
+    var effVal = eff[n];
+    var bonusHtml = '';
+    if (typeof statObj === 'object' && statObj !== null) {
+      if (statObj.item_bonus)  bonusHtml += ' <span style="color:#f0a500;font-size:.6rem">+' + statObj.item_bonus + 'i</span>';
+      if (statObj.skill_bonus) bonusHtml += ' <span style="color:#4caf50;font-size:.6rem">+' + statObj.skill_bonus + 's</span>';
+      if (statObj.level_bonus) bonusHtml += ' <span style="color:#9c6bda;font-size:.6rem">+' + statObj.level_bonus + 'l</span>';
+      if (statObj.temp_penalty < 0) bonusHtml += ' <span style="color:#e05252;font-size:.6rem">' + statObj.temp_penalty + '</span>';
+    }
     html += '<div class="stat-row">'
       + '<span class="stat-name">' + n + '</span>'
-      + '<span class="stat-bar">' + statBar(effVal) + '</span>'
-      + '<span class="stat-val">&nbsp;' + effVal + diffStr + '</span>'
+      + renderStatBar(statObj)
+      + '<span class="stat-val">&nbsp;' + effVal + bonusHtml + '</span>'
       + '</div>';
   });
   html += '</div>';
@@ -568,6 +594,7 @@ async function refreshInventoryUI() {
       }
     } catch(e) {}
   }
+  recalcItemBonuses();
   renderCharSheet();
 }
 
@@ -673,7 +700,12 @@ function handleSkillTracking(text) {
     if (uses % 5 === 0) {
       _skillRanks[skill.key] = (_skillRanks[skill.key] || 0) + 1;
       if (_character.stats.hasOwnProperty(skill.stat)) {
-        _character.stats[skill.stat] = Math.min(20, _character.stats[skill.stat] + 1);
+        var sObj = _character.stats[skill.stat];
+        if (typeof sObj === 'object' && sObj !== null) {
+          sObj.skill_bonus = (sObj.skill_bonus || 0) + 1;
+        } else {
+          _character.stats[skill.stat] = Math.min(20, sObj + 1);
+        }
       }
       appendSystemMsg('📈 **Skill rank up!** ' + skill.key.replace('_', ' ') + ' → Rank ' + _skillRanks[skill.key] + ' | ' + skill.stat + ' +1');
       renderCharSheet();
@@ -714,7 +746,14 @@ function showLevelUpChoice(newLevel) {
     var checked = [].slice.call(div.querySelectorAll('.lvl-choice:checked')).map(function(c) { return c.value; });
     if (checked.length !== 2) { alert('Choose exactly 2 stats.'); return; }
     checked.forEach(function(stat) {
-      if (_character.stats.hasOwnProperty(stat)) _character.stats[stat] = Math.min(20, _character.stats[stat] + 2);
+      if (_character.stats.hasOwnProperty(stat)) {
+        var sObj = _character.stats[stat];
+        if (typeof sObj === 'object' && sObj !== null) {
+          sObj.level_bonus = (sObj.level_bonus || 0) + 2;
+        } else {
+          _character.stats[stat] = Math.min(20, sObj + 2);
+        }
+      }
     });
     div.innerHTML = '<strong style="color:#d4a017">✅ Level ' + newLevel + ' bonuses applied:</strong> ' + checked.join(' & ') + ' +2 each';
     renderCharSheet();
@@ -1143,9 +1182,10 @@ async function refreshSaveList() {
 async function loadGame(id) {
   try {
     var s = await fetch('/api/game/saves/' + id).then(function(r) { return r.json(); });
-    _character = {genre: s.genre, name: s.char_name, gender: s.gender, subtype: s.subtype, stats: s.stats};
+    _character = {genre: s.genre, name: s.char_name, gender: s.gender, subtype: s.subtype, stats: migrateStats(s.stats || {})};
     _history = s.history || []; _currentSaveId = id; _turnCount = 0; _gameStarted = true;
     _inventory = {equipped: s.equipped || {}, bag: s.bag || [], bag_capacity: s.bag_capacity || 5};
+    recalcItemBonuses();
     _level = s.level || 1; _levelXp = s.level_xp || 0;
     _skillUses = s.skill_uses || {}; _skillRanks = s.skill_ranks || {};
     _pendingLootItem = null;
