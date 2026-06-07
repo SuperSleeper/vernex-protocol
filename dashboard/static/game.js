@@ -83,6 +83,14 @@ var SKILL_KEYWORDS = {
 var RARITY_COLORS = {common:'#8b949e', uncommon:'#3fb950', rare:'#58a6ff', legendary:'#d4a017', cursed:'#f85149'};
 var DEFEAT_KEYWORDS = ['defeated','slain','destroyed','falls unconscious','collapses','vanquished','killed','is dead'];
 var XP_THRESHOLDS = [3, 6, 10, 15];
+var COMBAT_START_WORDS = ['attacks','charges','lunges','draws weapon','raises staff','draws its','enemy appears','ambush','threatens','rushes at','attacks you','leaps at','snarls at','aims at'];
+var COMBAT_ENEMY_PATTERNS = {
+  fantasy: ['goblin','dark elf','forest wraith','wraith','orc warlord','orc','shadow mage','cursed knight','ancient dragon','dragon','lich king','lich','demon lord','demon'],
+  scifi:   ['rogue drone','drone','infected terminal','paradox glitch','glitch','alien warlord','rogue android','android','time anomaly','anomaly','rogue ai','hive mind','paradox entity'],
+  action:  ['bandit','rival soldier','street thug','thug','assassin','rival general','corrupt official','warlord','emperor','crime lord'],
+  comedy:  ['angry coworker','coworker','town busybody','busybody','bumbling sidekick','sidekick','micromanaging boss','town council','rival superhero','ceo','mayor of chaos','arch-nemesis']
+};
+var STAMINA_STAT_BY_GENRE = {fantasy:'Stamina', scifi:'Endurance', action:'Stamina', comedy:'Stubbornness'};
 
 // ── State ─────────────────────────────────────────────────────
 var _genre = null, _rolledStats = null, _character = null;
@@ -90,6 +98,9 @@ var _history = [], _gameStarted = false, _currentSaveId = null, _turnCount = 0;
 var _inventory = {equipped: {}, bag: [], bag_capacity: 5};
 var _level = 1, _levelXp = 0, _skillUses = {}, _skillRanks = {};
 var _pendingLootItem = null;
+var _playerHealth = null, _playerMaxHealth = null;
+var _inCombat = false, _combatEnemy = null;
+var _enemiesDefeated = 0, _bossesDefeated = 0;
 
 // ── View management ───────────────────────────────────────────
 function showView(v) {
@@ -293,6 +304,11 @@ async function startGame() {
   _inventory = {equipped: {}, bag: [], bag_capacity: 5};
   _level = 1; _levelXp = 0; _skillUses = {}; _skillRanks = {};
   _pendingLootItem = null;
+  _playerMaxHealth = computeMaxHealth();
+  _playerHealth = _playerMaxHealth;
+  _inCombat = false; _combatEnemy = null;
+  _enemiesDefeated = 0; _bossesDefeated = 0;
+  removeCombatPanel(); updateHealthBar();
   var ctx = document.getElementById('game-context').value.trim() || buildContext();
   renderCharSheet();
   showView('view-play');
@@ -405,6 +421,14 @@ function buildInventoryContext() {
   if (ranked.length) {
     lines.push('\nSkill Ranks:');
     ranked.forEach(function(sk) { lines.push('  ' + sk.key.replace('_', ' ') + ': Rank ' + _skillRanks[sk.key] + ' → ' + sk.stat + ' +' + _skillRanks[sk.key]); });
+  }
+  if (_playerMaxHealth !== null) {
+    lines.push('\nHealth: ' + Math.max(0, _playerHealth || 0) + '/' + _playerMaxHealth);
+  }
+  if (_inCombat && _combatEnemy) {
+    lines.push('IN COMBAT with: ' + _combatEnemy.name
+      + ' (HP: ' + _combatEnemy.health + '/' + _combatEnemy.max_health
+      + '  DEF: ' + _combatEnemy.defense + '  MGR: ' + _combatEnemy.magic_resist + ')');
   }
   return lines.join('\n');
 }
@@ -686,6 +710,246 @@ function showLevelUpChoice(newLevel) {
   requestAnimationFrame(function() { log.scrollTop = log.scrollHeight; });
 }
 
+// ── Combat helpers ────────────────────────────────────────────
+function getStaminaStat() {
+  if (!_character) return 10;
+  var key = STAMINA_STAT_BY_GENRE[_character.genre] || 'Stamina';
+  var eff = computeEffectiveStats();
+  return eff[key] || 10;
+}
+
+function computeMaxHealth() {
+  return Math.max(10, getStaminaStat() * 2);
+}
+
+function updateHealthBar() {
+  var hbTb = document.getElementById('health-bar-tb');
+  var hbFill = document.getElementById('hb-fill');
+  var hbLbl = document.getElementById('hb-label');
+  if (_playerMaxHealth === null) {
+    if (hbTb) hbTb.style.display = 'none';
+    return;
+  }
+  if (hbTb) hbTb.style.display = 'flex';
+  var hp = Math.max(0, _playerHealth || 0);
+  var pct = Math.round(hp / _playerMaxHealth * 100);
+  if (hbFill) {
+    hbFill.style.width = pct + '%';
+    hbFill.style.background = pct > 50 ? '#3fb950' : pct > 25 ? '#d4a017' : '#e94560';
+  }
+  if (hbLbl) hbLbl.textContent = hp + '/' + _playerMaxHealth;
+}
+
+function renderCombatPanel() {
+  var existing = document.getElementById('combat-panel');
+  if (!_inCombat || !_combatEnemy) {
+    if (existing) existing.remove();
+    return;
+  }
+  var enemy = _combatEnemy;
+  var hpPct = Math.max(0, Math.round(enemy.health / enemy.max_health * 100));
+  var html = '<div class="combat-name">⚔️ COMBAT — ' + escHtml(enemy.name) + '</div>'
+    + '<div class="combat-hp-row">'
+    + '<div class="combat-hp-track"><div class="combat-hp-fill" style="width:' + hpPct + '%"></div></div>'
+    + '<span class="combat-hp-label">HP: ' + enemy.health + '/' + enemy.max_health
+    + '&nbsp;&nbsp;DEF:' + enemy.defense + '&nbsp;MGR:' + enemy.magic_resist + '</span>'
+    + '</div>'
+    + '<div class="combat-actions">'
+    + '<button class="btn-combat" data-cb="physical">⚔️ Physical</button>'
+    + '<button class="btn-combat" data-cb="magic">✨ Magic</button>'
+    + '<button class="btn-combat" data-cb="skill">🎯 Skill</button>'
+    + '<button class="btn-combat btn-flee" data-cb="flee">🏃 Flee</button>'
+    + '</div>'
+    + '<div id="skill-input-row" style="display:none;align-items:center;gap:6px;margin-top:6px">'
+    + '<input type="text" id="skill-text-inp" class="sv-inp" placeholder="Describe your move…" style="flex:1;min-width:0">'
+    + '<button class="btn-sv" id="cb-skill-go">Strike!</button>'
+    + '</div>';
+  var panel;
+  if (!existing) {
+    panel = document.createElement('div');
+    panel.id = 'combat-panel';
+    panel.className = 'combat-panel';
+    var svForm = document.getElementById('sv-form');
+    svForm.parentNode.insertBefore(panel, svForm);
+  } else {
+    panel = existing;
+  }
+  panel.innerHTML = html;
+  panel.querySelectorAll('[data-cb]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var action = btn.getAttribute('data-cb');
+      if (action === 'physical') doAttack('physical');
+      else if (action === 'magic') doAttack('magic');
+      else if (action === 'skill') {
+        var row = document.getElementById('skill-input-row');
+        if (row) row.style.display = row.style.display === 'flex' ? 'none' : 'flex';
+      } else if (action === 'flee') doCombatFlee();
+    });
+  });
+  var sg = document.getElementById('cb-skill-go');
+  if (sg) sg.addEventListener('click', function() {
+    var inp = document.getElementById('skill-text-inp');
+    if (inp && inp.value.trim()) doSkillAttack(inp.value.trim());
+  });
+}
+
+function removeCombatPanel() {
+  var p = document.getElementById('combat-panel');
+  if (p) p.remove();
+}
+
+async function startCombat(enemyName) {
+  if (!_currentSaveId) {
+    await quickSave();
+    if (!_currentSaveId) return;
+  }
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/combat/start', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enemy_name: enemyName || null})
+    });
+    var d = await r.json();
+    if (d.enemy) {
+      _combatEnemy = d.enemy;
+      _inCombat = true;
+      _playerHealth = d.player_health;
+      _playerMaxHealth = d.player_max_health;
+      updateHealthBar();
+      renderCombatPanel();
+      appendSystemMsg('⚔️ **Combat started!** ' + d.enemy.name
+        + ' — HP: ' + d.enemy.health + '  DEF: ' + d.enemy.defense + '  MGR: ' + d.enemy.magic_resist);
+    }
+  } catch(e) {}
+}
+
+async function doAttack(attackType, qualityOverride) {
+  if (!_inCombat || !_currentSaveId) return;
+  var quality = qualityOverride || 1;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/combat/attack', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({attack_type: attackType, skill_quality: quality})
+    });
+    var d = await r.json();
+    handleCombatResult(d, attackType);
+  } catch(e) {}
+}
+
+async function doSkillAttack(skillText) {
+  if (!_inCombat || !_currentSaveId) return;
+  var quality = 1;
+  try {
+    var qr = await fetch('/api/game/combat/skill-quality', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({skill_text: skillText, genre: _character ? _character.genre : 'fantasy'})
+    });
+    var qd = await qr.json();
+    quality = qd.quality || 1;
+  } catch(e) {}
+  var stars = ['★', '★★', '★★★', '★★★★'][quality - 1] || '★';
+  appendSystemMsg('🎯 **Skill:** "' + skillText + '" — Quality ' + stars);
+  var row = document.getElementById('skill-input-row');
+  if (row) row.style.display = 'none';
+  var inp = document.getElementById('skill-text-inp');
+  if (inp) inp.value = '';
+  await doAttack('skill', quality);
+}
+
+async function doCombatFlee() {
+  if (!_inCombat || !_currentSaveId) return;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/combat/flee', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+    var d = await r.json();
+    if (d.fled) {
+      _inCombat = false; _combatEnemy = null;
+      removeCombatPanel();
+      appendSystemMsg('🏃 You fled from combat!');
+    } else {
+      _playerHealth = d.player_health;
+      appendSystemMsg('❌ Flee failed! Took ' + d.enemy_damage + ' damage.');
+      updateHealthBar();
+      if (d.player_dead) { _inCombat = false; removeCombatPanel(); showGameOver(null); }
+    }
+  } catch(e) {}
+}
+
+function handleCombatResult(d, attackType) {
+  if (d.error) { appendSystemMsg('⚠️ Combat error: ' + d.error); return; }
+  if (_combatEnemy) _combatEnemy.health = d.enemy_health;
+  _playerHealth = d.player_health;
+  var typeLabel = attackType === 'magic' ? '✨ Magic' : attackType === 'skill' ? '🎯 Skill' : '⚔️ Physical';
+  var lines = [typeLabel + ' → **' + d.player_damage + ' damage** to ' + escHtml(d.enemy_name || 'enemy')];
+  if (d.enemy_damage > 0) {
+    lines.push((d.enemy_name || 'Enemy') + ' counter-attacks → **' + d.enemy_damage + ' damage** to you');
+  }
+  if (d.special_triggered) {
+    var sNames = {fire_breath:'🔥 Fire Breath', mind_control:'🧠 Mind Control',
+                  call_reinforcements:'💯 Calls Reinforcements', rumor_spread:'📢 Rumor Spread',
+                  power_malfunction:'⚡ Power Malfunction'};
+    lines.push('💥 Special: **' + (sNames[d.special_name] || d.special_name) + '**');
+  }
+  appendSystemMsg(lines.join('\n'));
+  updateHealthBar();
+  if (d.enemy_defeated) {
+    _inCombat = false; _combatEnemy = null;
+    _enemiesDefeated++;
+    if (d.is_boss) _bossesDefeated++;
+    removeCombatPanel();
+    appendSystemMsg('🏆 **' + escHtml(d.enemy_name) + ' defeated!** Searching for loot…');
+    handleLootDrop(d.is_boss || d.loot_tier === 'legendary');
+    handleXpGain(d.is_boss ? 2 : 1);
+  } else if (d.player_dead) {
+    _inCombat = false; _combatEnemy = null;
+    removeCombatPanel();
+    showGameOver(d);
+  } else {
+    renderCombatPanel();
+  }
+}
+
+function detectCombatStart(text) {
+  if (_inCombat) return;
+  var lower = text.toLowerCase();
+  var signal = COMBAT_START_WORDS.some(function(w) { return lower.indexOf(w) >= 0; });
+  if (!signal) return;
+  var genre = (_character && _character.genre) || 'fantasy';
+  var patterns = COMBAT_ENEMY_PATTERNS[genre] || COMBAT_ENEMY_PATTERNS['fantasy'];
+  var name = null;
+  for (var i = 0; i < patterns.length; i++) {
+    if (lower.indexOf(patterns[i]) >= 0) { name = patterns[i]; break; }
+  }
+  startCombat(name);
+}
+
+function showGameOver(d) {
+  var log = document.getElementById('chat-log');
+  if (!log) return;
+  var existing = document.getElementById('game-over-block');
+  if (existing) existing.remove();
+  var div = document.createElement('div');
+  div.id = 'game-over-block';
+  div.className = 'game-over-block';
+  var charLine = _character ? escHtml(_character.name) + ' — Level ' + _level + '<br>' : '';
+  div.innerHTML = '<div class="go-title">GAME OVER</div>'
+    + '<div class="go-stats">'
+    + charLine
+    + 'Enemies defeated: ' + _enemiesDefeated + '<br>'
+    + 'Bosses defeated: ' + _bossesDefeated + '<br>'
+    + 'Cause: Combat damage'
+    + '</div>'
+    + '<div class="go-btns">'
+    + '<button class="btn-sv" id="go-load">📂 Load Save</button>'
+    + '<button class="btn-sv" id="go-new">🏠 New Game</button>'
+    + '</div>';
+  log.appendChild(div);
+  requestAnimationFrame(function() { log.scrollTop = log.scrollHeight; });
+  div.querySelector('#go-load').addEventListener('click', function() { toggleLoadPanel(); div.remove(); });
+  div.querySelector('#go-new').addEventListener('click', function() { resetGame(); });
+}
+
 // ── Chat ──────────────────────────────────────────────────────
 async function sendTurn(e) {
   if (e && e.preventDefault) e.preventDefault();
@@ -708,6 +972,7 @@ async function sendTurn(e) {
     appendMsg('assistant', resp);
     _turnCount++;
     if (_turnCount % 5 === 0) autoSave();
+    detectCombatStart(resp);
     detectLootDrop(resp);
     handleSkillTracking(resp);
   } catch(err) {
@@ -750,6 +1015,10 @@ function resetGame() {
   _inventory = {equipped: {}, bag: [], bag_capacity: 5};
   _level = 1; _levelXp = 0; _skillUses = {}; _skillRanks = {};
   _pendingLootItem = null;
+  _playerHealth = null; _playerMaxHealth = null;
+  _inCombat = false; _combatEnemy = null;
+  _enemiesDefeated = 0; _bossesDefeated = 0;
+  removeCombatPanel(); updateHealthBar();
   document.getElementById('prompt').disabled = true;
   document.getElementById('submit-btn').disabled = true;
   document.getElementById('prompt').value = '';
@@ -785,7 +1054,10 @@ async function saveGame(name, id) {
     char_name: _character.name, gender: _character.gender,
     stats: _character.stats, history: _history,
     equipped: _inventory.equipped, bag: _inventory.bag, bag_capacity: _inventory.bag_capacity,
-    level: _level, level_xp: _levelXp, skill_uses: _skillUses, skill_ranks: _skillRanks
+    level: _level, level_xp: _levelXp, skill_uses: _skillUses, skill_ranks: _skillRanks,
+    current_health: _playerHealth, max_health: _playerMaxHealth,
+    in_combat: _inCombat, enemy_state: _combatEnemy,
+    enemies_defeated: _enemiesDefeated, bosses_defeated: _bossesDefeated
   };
   try {
     var url = id ? '/api/game/saves/' + id : '/api/game/saves';
@@ -809,7 +1081,10 @@ async function autoSave() {
     char_name: _character.name, gender: _character.gender,
     stats: _character.stats, history: _history, autosave: true,
     equipped: _inventory.equipped, bag: _inventory.bag, bag_capacity: _inventory.bag_capacity,
-    level: _level, level_xp: _levelXp, skill_uses: _skillUses, skill_ranks: _skillRanks
+    level: _level, level_xp: _levelXp, skill_uses: _skillUses, skill_ranks: _skillRanks,
+    current_health: _playerHealth, max_health: _playerMaxHealth,
+    in_combat: _inCombat, enemy_state: _combatEnemy,
+    enemies_defeated: _enemiesDefeated, bosses_defeated: _bossesDefeated
   };
   try {
     await fetch('/api/game/saves/autosave-' + _character.genre, {
@@ -860,6 +1135,13 @@ async function loadGame(id) {
     _level = s.level || 1; _levelXp = s.level_xp || 0;
     _skillUses = s.skill_uses || {}; _skillRanks = s.skill_ranks || {};
     _pendingLootItem = null;
+    _playerMaxHealth = s.max_health || computeMaxHealth();
+    _playerHealth = s.current_health !== undefined ? s.current_health : _playerMaxHealth;
+    _inCombat = !!(s.in_combat && s.enemy_state && !s.enemy_state.defeated);
+    _combatEnemy = _inCombat ? s.enemy_state : null;
+    _enemiesDefeated = s.enemies_defeated || 0;
+    _bossesDefeated = s.bosses_defeated || 0;
+    removeCombatPanel(); updateHealthBar();
     renderCharSheet();
     showView('view-play');
     hideLoadPanel();
@@ -867,6 +1149,7 @@ async function loadGame(id) {
     log.innerHTML = '';
     var last = _history.filter(function(m) { return m.role === 'assistant'; });
     if (last.length) appendMsg('assistant', last[last.length - 1].content);
+    if (_inCombat) renderCombatPanel();
     document.getElementById('prompt').disabled = false;
     document.getElementById('submit-btn').disabled = false;
     document.getElementById('qs-btn').disabled = false;

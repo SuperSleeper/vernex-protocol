@@ -51,7 +51,7 @@ def get_nodes() -> dict:
         _peers_last_fetch = now
         return dict(nodes)
 
-def _get_daemon_version(fallback: str = "v0.12.29") -> str:
+def _get_daemon_version(fallback: str = "v0.12.33") -> str:
     try:
         r = requests.get(f"{LOCAL_URL}/status", timeout=2, verify=False)
         v = r.json().get("version", "")
@@ -810,6 +810,26 @@ details[open]>summary::before{transform:rotate(90deg)}
 .lvl-choices label{cursor:pointer;color:#e0e0e0;font-size:.8rem}
 .btn-lvl{background:#238636;color:#fff;border:none;border-radius:4px;padding:5px 12px;font-size:.8rem;cursor:pointer;font-family:inherit;margin-top:4px}
 .btn-lvl:hover{background:#2ea043}
+.combat-panel{background:#0d1117;border:1px solid #e94560;border-radius:7px;padding:10px 12px;margin-bottom:8px}
+.combat-name{font-size:.88rem;font-weight:700;color:#e94560;margin-bottom:6px;font-family:'Courier New',monospace}
+.combat-hp-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.combat-hp-track{background:#1a0a0a;border-radius:2px;height:10px;flex:1;overflow:hidden}
+.combat-hp-fill{height:100%;background:#e94560;border-radius:2px;transition:width .3s}
+.combat-hp-label{font-size:.71rem;color:#8892a4;white-space:nowrap;font-family:'Courier New',monospace}
+.combat-actions{display:flex;gap:6px;flex-wrap:wrap}
+.btn-combat{background:#1a0a0a;border:1px solid #e94560;color:#e94560;border-radius:5px;padding:5px 11px;font-size:.78rem;cursor:pointer;font-family:inherit}
+.btn-combat:hover:not(:disabled){background:#e94560;color:#0d1117}
+.btn-combat:disabled{opacity:.4;cursor:not-allowed}
+.btn-flee{border-color:#d29922!important;color:#d29922!important}
+.btn-flee:hover:not(:disabled){background:#d29922!important;color:#0d1117!important}
+.health-bar-tb{display:flex;align-items:center;gap:4px;font-size:.74rem;white-space:nowrap;flex-shrink:0}
+.hb-track{background:#1a0a0a;border-radius:2px;height:8px;width:54px;overflow:hidden}
+.hb-fill{height:100%;background:#3fb950;border-radius:2px;transition:width .3s}
+.hb-label{color:#c9d1d9;font-family:'Courier New',monospace}
+.game-over-block{background:#0d1117;border:2px solid #e94560;border-radius:8px;padding:24px 20px;text-align:center;align-self:stretch;display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:12px}
+.go-title{font-size:1.6rem;color:#e94560;font-weight:900;letter-spacing:.08em;font-family:'Courier New',monospace}
+.go-stats{font-size:.84rem;color:#8892a4;text-align:center;line-height:2;font-family:'Courier New',monospace}
+.go-btns{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
 .input-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
 select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px;font-size:.85rem;font-family:inherit}
 #prompt{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:10px;font-size:.9rem;width:100%;resize:vertical;min-height:60px;font-family:inherit}
@@ -927,6 +947,7 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
     <button class="btn-sv" id="sv-load-btn">&#128194; Load</button>
     <span id="sv-st" class="sv-st"></span>
     <div class="toolbar-gap"></div>
+    <div id="health-bar-tb" class="health-bar-tb" style="display:none">&#10084;&#65039;&nbsp;<div class="hb-track"><div class="hb-fill" id="hb-fill"></div></div>&nbsp;<span class="hb-label" id="hb-label">&#8212;</span></div>
     <select id="model-select"><option value="mistral">mistral</option></select>
   </div>
   <textarea id="prompt" placeholder="What do you do?" disabled></textarea>
@@ -1266,6 +1287,138 @@ def _write_save_record(save_id: str, user_id: str, record: dict):
         json.dump(record, f, indent=2)
 
 
+# ── Combat enemy tables ────────────────────────────────────────────────────────
+
+_ENEMY_TABLES: dict = {
+    'fantasy': {
+        (1, 2): [
+            {'name': 'Goblin',         'type': 'normal', 'bh': 15, 'bs': 5,  'bd': 2,  'bm': 1,  'sp': 6,  'ability': None},
+            {'name': 'Dark Elf Scout', 'type': 'normal', 'bh': 18, 'bs': 6,  'bd': 3,  'bm': 2,  'sp': 8,  'ability': 'call_reinforcements'},
+            {'name': 'Forest Wraith',  'type': 'normal', 'bh': 14, 'bs': 7,  'bd': 1,  'bm': 4,  'sp': 7,  'ability': 'mind_control'},
+        ],
+        (3, 4): [
+            {'name': 'Orc Warlord',   'type': 'normal', 'bh': 25, 'bs': 9,  'bd': 5,  'bm': 2,  'sp': 5,  'ability': 'call_reinforcements'},
+            {'name': 'Shadow Mage',   'type': 'normal', 'bh': 20, 'bs': 8,  'bd': 3,  'bm': 6,  'sp': 7,  'ability': 'mind_control'},
+            {'name': 'Cursed Knight', 'type': 'normal', 'bh': 28, 'bs': 10, 'bd': 7,  'bm': 3,  'sp': 6,  'ability': None},
+        ],
+        (5, 6): [
+            {'name': 'Ancient Dragon', 'type': 'boss', 'bh': 40, 'bs': 14, 'bd': 10, 'bm': 8,  'sp': 7,  'ability': 'fire_breath',        'cd': 3},
+            {'name': 'The Lich King',  'type': 'boss', 'bh': 35, 'bs': 12, 'bd': 8,  'bm': 12, 'sp': 6,  'ability': 'mind_control',       'cd': 2},
+            {'name': 'Demon Lord',     'type': 'boss', 'bh': 45, 'bs': 16, 'bd': 12, 'bm': 10, 'sp': 8,  'ability': 'call_reinforcements', 'cd': 4},
+        ],
+    },
+    'scifi': {
+        (1, 2): [
+            {'name': 'Rogue Drone',         'type': 'normal', 'bh': 12, 'bs': 4,  'bd': 3,  'bm': 2,  'sp': 9,  'ability': 'power_malfunction'},
+            {'name': 'Infected Terminal',   'type': 'normal', 'bh': 16, 'bs': 5,  'bd': 4,  'bm': 3,  'sp': 5,  'ability': None},
+            {'name': 'Minor Paradox Glitch','type': 'normal', 'bh': 14, 'bs': 6,  'bd': 2,  'bm': 5,  'sp': 7,  'ability': 'mind_control'},
+        ],
+        (3, 4): [
+            {'name': 'Alien Warlord', 'type': 'normal', 'bh': 26, 'bs': 9,  'bd': 6,  'bm': 4,  'sp': 7,  'ability': 'call_reinforcements'},
+            {'name': 'Rogue Android', 'type': 'normal', 'bh': 22, 'bs': 10, 'bd': 7,  'bm': 3,  'sp': 8,  'ability': 'power_malfunction'},
+            {'name': 'Time Anomaly',  'type': 'normal', 'bh': 20, 'bs': 8,  'bd': 4,  'bm': 8,  'sp': 9,  'ability': 'mind_control'},
+        ],
+        (5, 6): [
+            {'name': 'Rogue AI Overlord', 'type': 'boss', 'bh': 42, 'bs': 15, 'bd': 12, 'bm': 10, 'sp': 7,  'ability': 'power_malfunction',   'cd': 3},
+            {'name': 'Alien Hive Mind',   'type': 'boss', 'bh': 38, 'bs': 13, 'bd': 9,  'bm': 8,  'sp': 8,  'ability': 'call_reinforcements',  'cd': 2},
+            {'name': 'Paradox Entity',    'type': 'boss', 'bh': 36, 'bs': 11, 'bd': 7,  'bm': 14, 'sp': 10, 'ability': 'mind_control',         'cd': 2},
+        ],
+    },
+    'action': {
+        (1, 2): [
+            {'name': 'Bandit',        'type': 'normal', 'bh': 14, 'bs': 5,  'bd': 2,  'bm': 0, 'sp': 7,  'ability': None},
+            {'name': 'Rival Soldier', 'type': 'normal', 'bh': 17, 'bs': 6,  'bd': 4,  'bm': 0, 'sp': 6,  'ability': 'call_reinforcements'},
+            {'name': 'Street Thug',   'type': 'normal', 'bh': 12, 'bs': 7,  'bd': 1,  'bm': 0, 'sp': 8,  'ability': None},
+        ],
+        (3, 4): [
+            {'name': 'Assassin',         'type': 'normal', 'bh': 20, 'bs': 11, 'bd': 4,  'bm': 0, 'sp': 10, 'ability': None},
+            {'name': 'Rival General',    'type': 'normal', 'bh': 26, 'bs': 9,  'bd': 7,  'bm': 0, 'sp': 6,  'ability': 'call_reinforcements'},
+            {'name': 'Corrupt Official', 'type': 'normal', 'bh': 18, 'bs': 7,  'bd': 5,  'bm': 0, 'sp': 5,  'ability': 'rumor_spread'},
+        ],
+        (5, 6): [
+            {'name': 'Warlord',             'type': 'boss', 'bh': 44, 'bs': 15, 'bd': 11, 'bm': 0, 'sp': 7,  'ability': 'call_reinforcements', 'cd': 3},
+            {'name': "Emperor's Champion",  'type': 'boss', 'bh': 40, 'bs': 14, 'bd': 13, 'bm': 0, 'sp': 8,  'ability': None},
+            {'name': 'Crime Lord',          'type': 'boss', 'bh': 38, 'bs': 12, 'bd': 9,  'bm': 0, 'sp': 9,  'ability': 'rumor_spread',        'cd': 4},
+        ],
+    },
+    'comedy': {
+        (1, 2): [
+            {'name': 'Angry Coworker',   'type': 'normal', 'bh': 10, 'bs': 4,  'bd': 1,  'bm': 0, 'sp': 5, 'ability': 'rumor_spread'},
+            {'name': 'Town Busybody',    'type': 'normal', 'bh': 12, 'bs': 3,  'bd': 2,  'bm': 0, 'sp': 6, 'ability': 'rumor_spread'},
+            {'name': 'Bumbling Sidekick','type': 'normal', 'bh': 8,  'bs': 5,  'bd': 1,  'bm': 0, 'sp': 7, 'ability': 'power_malfunction'},
+        ],
+        (3, 4): [
+            {'name': 'Micromanaging Boss', 'type': 'normal', 'bh': 20, 'bs': 7,  'bd': 4,  'bm': 0, 'sp': 4, 'ability': 'rumor_spread'},
+            {'name': 'Town Council',       'type': 'normal', 'bh': 24, 'bs': 6,  'bd': 5,  'bm': 0, 'sp': 3, 'ability': 'call_reinforcements'},
+            {'name': 'Rival Superhero',    'type': 'normal', 'bh': 22, 'bs': 9,  'bd': 3,  'bm': 0, 'sp': 9, 'ability': 'power_malfunction'},
+        ],
+        (5, 6): [
+            {'name': 'The CEO',               'type': 'boss', 'bh': 36, 'bs': 12, 'bd': 10, 'bm': 0, 'sp': 5,  'ability': 'rumor_spread',        'cd': 3},
+            {'name': 'Mayor of Chaos',        'type': 'boss', 'bh': 32, 'bs': 10, 'bd': 8,  'bm': 0, 'sp': 6,  'ability': 'call_reinforcements', 'cd': 2},
+            {'name': 'Arch-Nemesis Superhero','type': 'boss', 'bh': 40, 'bs': 14, 'bd': 6,  'bm': 0, 'sp': 10, 'ability': 'power_malfunction',   'cd': 3},
+        ],
+    },
+}
+
+_ATTACK_STATS = {
+    'fantasy': {'physical': 'Strength',  'magic': 'Magic',        'skill': 'Strength'},
+    'scifi':   {'physical': 'Tech Skill','magic': 'Intelligence',  'skill': 'Tech Skill'},
+    'action':  {'physical': 'Strength',  'magic': 'Cunning',       'skill': 'Cunning'},
+    'comedy':  {'physical': 'Charisma',  'magic': 'Wit',           'skill': 'Charm'},
+}
+_STAMINA_STAT = {
+    'fantasy': 'Stamina', 'scifi': 'Endurance', 'action': 'Stamina', 'comedy': 'Stubbornness',
+}
+
+
+def _generate_enemy(genre: str, level: int, enemy_name: str = None) -> dict:
+    table = _ENEMY_TABLES.get(genre, _ENEMY_TABLES['fantasy'])
+    tier_key = None
+    for k in table:
+        if k[0] <= level <= k[1]:
+            tier_key = k
+            break
+    if not tier_key:
+        tier_key = max(table.keys())
+    tier = table[tier_key]
+    template = None
+    if enemy_name:
+        en = enemy_name.lower()
+        for t in table.values():
+            template = next((e for e in t if e['name'].lower() in en or en in e['name'].lower()), None)
+            if template:
+                break
+    if not template:
+        template = random.choice(tier)
+    is_boss = template.get('type') == 'boss'
+    m = 2.0 if is_boss else 1.0
+    health = int((template['bh'] + level * 8) * m)
+    return {
+        'id': _uuid.uuid4().hex[:8],
+        'name': template['name'],
+        'type': template.get('type', 'normal'),
+        'health': health,
+        'max_health': health,
+        'strength': int((template['bs'] + level * 2) * m),
+        'defense': int((template['bd'] + level * 1) * m),
+        'magic_resist': int((template['bm'] + level * 1) * m),
+        'speed': template['sp'],
+        'special_ability': template.get('ability'),
+        'special_cooldown': template.get('cd', 3),
+        'special_counter': 0,
+        'loot_tier': 'legendary' if is_boss else ('rare' if level >= 4 else ('uncommon' if level >= 2 else 'common')),
+        'defeated': False,
+    }
+
+
+def _eff_stat(stats: dict, equipped: dict, stat_name: str) -> int:
+    base = stats.get(stat_name, 5)
+    for item in equipped.values():
+        if item:
+            base += item.get('stat_effects', {}).get(stat_name, 0)
+    return max(1, base)
+
+
 def _save_path(save_id: str, user_id: str = "guest") -> str:
     d = _saves_dir(user_id)
     os.makedirs(d, exist_ok=True)
@@ -1463,6 +1616,176 @@ def api_inventory_add(save_id):
     s["bag"] = bag
     _write_save_record(save_id, uid, s)
     return jsonify({"ok": True, "bag": bag})
+
+
+@app.route("/api/game/saves/<save_id>/combat/start", methods=["POST"])
+def api_combat_start(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    genre = s.get("genre", "fantasy")
+    level = s.get("level", 1)
+    enemy = _generate_enemy(genre, level, body.get("enemy_name"))
+    stats = s.get("stats", {})
+    stamina_key = _STAMINA_STAT.get(genre, "Stamina")
+    max_hp = max(10, stats.get(stamina_key, 10) * 2)
+    s.setdefault("max_health", max_hp)
+    s.setdefault("current_health", s["max_health"])
+    s["enemy_state"] = enemy
+    s["in_combat"] = True
+    s.setdefault("enemies_defeated", 0)
+    s.setdefault("bosses_defeated", 0)
+    _write_save_record(save_id, uid, s)
+    return jsonify({
+        "enemy": enemy,
+        "player_health": s["current_health"],
+        "player_max_health": s["max_health"],
+    })
+
+
+@app.route("/api/game/saves/<save_id>/combat/attack", methods=["POST"])
+def api_combat_attack(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    attack_type = body.get("attack_type", "physical")
+    skill_quality = max(1, min(4, int(body.get("skill_quality", 1))))
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    if not s.get("in_combat") or not s.get("enemy_state"):
+        return jsonify({"error": "not in combat"}), 400
+    enemy = s["enemy_state"]
+    if enemy.get("defeated"):
+        return jsonify({"error": "already defeated"}), 400
+    genre = s.get("genre", "fantasy")
+    stats = s.get("stats", {})
+    equipped = s.get("equipped", {})
+    atk_stat = _ATTACK_STATS.get(genre, {}).get(attack_type, "Strength")
+    atk_val = _eff_stat(stats, equipped, atk_stat)
+    sq_bonus = skill_quality - 1
+    if attack_type == "magic":
+        dmg = max(1, atk_val + sq_bonus - enemy["magic_resist"])
+    else:
+        dmg = max(1, atk_val + sq_bonus - enemy["defense"])
+    enemy["health"] = max(0, enemy["health"] - dmg)
+    stamina_key = _STAMINA_STAT.get(genre, "Stamina")
+    stamina_val = _eff_stat(stats, equipped, stamina_key)
+    result: dict = {
+        "player_damage": dmg, "attack_type": attack_type,
+        "enemy_health": enemy["health"], "enemy_max_health": enemy["max_health"],
+        "enemy_name": enemy["name"], "is_boss": enemy["type"] == "boss",
+        "enemy_defeated": False, "player_dead": False,
+        "player_health": s.get("current_health", s.get("max_health", 20)),
+        "player_max_health": s.get("max_health", 20),
+        "enemy_damage": 0, "special_triggered": False,
+        "special_name": None, "loot_tier": enemy.get("loot_tier", "common"),
+    }
+    if enemy["health"] <= 0:
+        enemy["defeated"] = True
+        s["in_combat"] = False
+        s["enemies_defeated"] = s.get("enemies_defeated", 0) + 1
+        if enemy["type"] == "boss":
+            s["bosses_defeated"] = s.get("bosses_defeated", 0) + 1
+        result["enemy_defeated"] = True
+    else:
+        enemy["special_counter"] = enemy.get("special_counter", 0) + 1
+        special = enemy.get("special_ability")
+        cooldown = enemy.get("special_cooldown", 3)
+        e_dmg = max(1, enemy["strength"] - stamina_val)
+        if special and enemy["special_counter"] >= cooldown:
+            enemy["special_counter"] = 0
+            result["special_triggered"] = True
+            result["special_name"] = special
+            if special == "fire_breath":
+                e_dmg = max(1, enemy["strength"])
+            elif special == "mind_control":
+                s["skip_next_turn"] = True
+                e_dmg = 0
+            elif special == "rumor_spread":
+                ch_key = "Charm" if genre == "comedy" else "Charisma"
+                stats[ch_key] = max(1, stats.get(ch_key, 5) - 2)
+                s["stats"] = stats
+            elif special == "power_malfunction":
+                s["skill_disabled_turns"] = 2
+        s["current_health"] = max(0, s.get("current_health", s.get("max_health", 20)) - e_dmg)
+        result["enemy_damage"] = e_dmg
+        result["player_health"] = s["current_health"]
+        if s["current_health"] <= 0:
+            result["player_dead"] = True
+            s["in_combat"] = False
+    s["enemy_state"] = enemy
+    _write_save_record(save_id, uid, s)
+    return jsonify(result)
+
+
+@app.route("/api/game/saves/<save_id>/combat/flee", methods=["POST"])
+def api_combat_flee(save_id):
+    uid = _user_id(_get_current_user())
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    result: dict = {"fled": False, "enemy_damage": 0, "player_dead": False,
+                    "player_health": s.get("current_health", s.get("max_health", 20)),
+                    "player_max_health": s.get("max_health", 20)}
+    if random.random() < 0.6:
+        result["fled"] = True
+        s["in_combat"] = False
+        s["enemy_state"] = None
+    else:
+        enemy = s.get("enemy_state") or {}
+        e_dmg = max(1, (enemy.get("strength") or 5) // 2)
+        s["current_health"] = max(0, s.get("current_health", s.get("max_health", 20)) - e_dmg)
+        result["enemy_damage"] = e_dmg
+        result["player_health"] = s["current_health"]
+        if s["current_health"] <= 0:
+            result["player_dead"] = True
+            s["in_combat"] = False
+    _write_save_record(save_id, uid, s)
+    return jsonify(result)
+
+
+@app.route("/api/game/saves/<save_id>/combat/state")
+def api_combat_state(save_id):
+    uid = _user_id(_get_current_user())
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({
+        "in_combat": s.get("in_combat", False),
+        "enemy_state": s.get("enemy_state"),
+        "current_health": s.get("current_health"),
+        "max_health": s.get("max_health"),
+        "enemies_defeated": s.get("enemies_defeated", 0),
+        "bosses_defeated": s.get("bosses_defeated", 0),
+    })
+
+
+@app.route("/api/game/combat/skill-quality", methods=["POST"])
+def api_combat_skill_quality():
+    body = request.get_json(force=True) or {}
+    skill_text = (body.get("skill_text") or "").strip()
+    genre = body.get("genre", "fantasy")
+    if not skill_text:
+        return jsonify({"quality": 1})
+    prompt = (
+        f"Rate this skill expression for a {genre} text adventure on a scale of 1-4.\n"
+        f"1=single word or generic. 2=on-theme, 2-10 words. 3=creative/detailed. 4=exceptional/rhyming.\n"
+        f'Text: "{skill_text[:200]}"\nReply with ONLY a single digit: 1, 2, 3, or 4.'
+    )
+    try:
+        r = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={"model": "mistral", "prompt": prompt, "stream": False},
+            timeout=15,
+        )
+        text = r.json().get("response", "1").strip()
+        q = int(text[0]) if text and text[0].isdigit() else 1
+        q = max(1, min(4, q))
+    except Exception:
+        q = 1
+    return jsonify({"quality": q})
 
 
 @app.route("/api/status")
