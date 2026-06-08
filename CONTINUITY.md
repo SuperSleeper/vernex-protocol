@@ -4,7 +4,7 @@
 June 7, 2026 (End of Session)
 
 ## Current Version
-v0.12.38
+v0.12.39
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -13,6 +13,24 @@ v0.12.38
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-07)
+
+### v0.12.39 — NPC recruitment + stat roll + rival + talk-down system (dashboard)
+✅ **NPC stat rolling**: 4d6 drop-lowest per stat; triggered on first recruit attempt or rival creation; `_roll_4d6_drop_lowest()` + `_roll_npc_stats(genre)` helpers; stored in `npc.stats`, `npc.stats_rolled=true`
+✅ **`_NPC_STAT_NAMES`**: stat lists per genre matching player stat names (fantasy/scifi/action/comedy)
+✅ **`_eval_speech_quality(text)`**: 1-4 heuristic (word count + power words); bonus 0/+1/+2/+3 added to player Charisma for recruitment/talkdown checks
+✅ **`_player_charisma(s)`**: extracts effective Charisma from save (handles both flat int and new dict stat format); uses Charm for comedy genre
+✅ **Recruitment check** (`POST /npc/recruit`): auto-join if befriended (5+ interactions); player score = Charisma + speech bonus vs NPC Charisma; outcomes: auto_join/success/flip_success/flip_fail/fail; tracks `recruit_attempts` + `last_recruit_attempt`
+✅ **Talk-down check** (`POST /npc/talkdown`): same score formula vs rival NPC Charisma; success/flip_success → neutral; fail/flip_fail → +10% combat stats (`npc.combat_stat_bonus=10`)
+✅ **Rival route** (`POST /npc/rival`): sets `relationship='rival'`, rolls stats if not already rolled
+✅ **Client recruitment flow**: `detectRecruitmentIntent()` scans player prompt for NPC_RECRUIT_KEYWORDS; `findNpcInText()` identifies target NPC by name; `attemptRecruitment()` called after LLM response if keywords matched + non-ally NPC found; shows styled outcome notification
+✅ **Client talkdown flow**: `detectTalkdownIntent()` scans for NPC_TALKDOWN_KEYWORDS; `attemptTalkDown()` called if rival NPC found; shows outcome notification
+✅ **Outcome notifications**: ⭐ auto_join | ✅ success | 🎲 flip_success | 🎲 flip_fail | ❌ fail with Charisma comparison; 🟡 talkdown success | ⚠️ talkdown fail with +10% warning
+✅ **`formatNpcStats()`**: abbreviates stat names (STR/STA/CHA/MAG/AGI/LCK etc.) via STAT_ABBREV map; used in recruitment notifications + char sheet panel
+✅ **Char sheet NPC stats**: shown below depth bar when `npc.stats_rolled` and stats exist; uses `.cs-npc-stats` (monospace, muted)
+✅ **`markNpcRival(npcId)`**: async client helper wrapping `/npc/rival` route
+✅ **NPC name detection improved**: pat4 (narrator intro) removed — was generating false positives like "Lead"; NPC_NAME_EXCLUSIONS expanded with 30+ new words (Lead, Voice, Sound, Figure, Shadow, Shape, Farmer, Soldier, common nouns, colors, elements)
+✅ **Pre-Context 1 updated**: recruitment/talkdown rule block added; rival Strength threat reminder; recruit attempt memory note
+✅ **Commit**: a6f2521 — pushed to origin main
 
 ### v0.12.38 — NPC relationship system + depth tracking + memory (dashboard)
 ✅ **NPC data structure**: `{id, name, relationship, interactions, depth_level, backstory, memory[], last_location, stats_rolled, stats}` stored in save file under `npcs` object (id-keyed)
@@ -954,4 +972,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol — daemon v0.12.18 (both nodes), dashboard v0.12.38 (node1 only). Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard, distributed CA (Root → Intermediate → Compute Node, Shamir K-of-N), clock verification (4-step NTP guard). Dashboard (node1 only): multi-genre text adventure at /game (Fantasy/Sci-Fi/Action/ComedyDrama), D&D-style 4d6 stat rolling with subtype modifiers, three-layer LLM context (universal rules + genre rules + custom), per-class starting inventory auto-equipped on game start, item condition + state tracking (0–100% condition, broken/lost/missing states), NPC relationship system (7 states, depth tracking, memory, narrative detection), per-user save isolation under ~/vernex/config/game_saves/<user_id>/, Google OAuth via vernex.net relay, GPU gauge (RTX 3070). Update scripts: node1 = vernex-bootstrap-setup.sh, node2 = vernex-node-setup.sh. Patent pending US App. 64/015,885, deadline March 24 2027.*
+*Vernex Protocol — daemon v0.12.18 (both nodes), dashboard v0.12.39 (node1 only). Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard, distributed CA (Root → Intermediate → Compute Node, Shamir K-of-N), clock verification (4-step NTP guard). Dashboard (node1 only): multi-genre text adventure at /game (Fantasy/Sci-Fi/Action/ComedyDrama), D&D-style 4d6 stat rolling with subtype modifiers, three-layer LLM context (universal rules + genre rules + custom), per-class starting inventory auto-equipped on game start, item condition + state tracking (0–100% condition, broken/lost/missing states), NPC relationship system (7 states, depth tracking, memory, narrative detection), per-user save isolation under ~/vernex/config/game_saves/<user_id>/, Google OAuth via vernex.net relay, GPU gauge (RTX 3070). Update scripts: node1 = vernex-bootstrap-setup.sh, node2 = vernex-node-setup.sh. Patent pending US App. 64/015,885, deadline March 24 2027.*
