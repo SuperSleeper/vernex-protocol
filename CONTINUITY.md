@@ -4,7 +4,7 @@
 June 7, 2026 (End of Session)
 
 ## Current Version
-v0.12.37
+v0.12.38
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -13,6 +13,21 @@ v0.12.37
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-07)
+
+### v0.12.38 — NPC relationship system + depth tracking + memory (dashboard)
+✅ **NPC data structure**: `{id, name, relationship, interactions, depth_level, backstory, memory[], last_location, stats_rolled, stats}` stored in save file under `npcs` object (id-keyed)
+✅ **Relationship states**: unknown → passive → friendly (1+) → befriended (5+) → ally (party join) / rival (betrayal) / neutral (talked down); locked states (ally/rival/neutral) not auto-advanced
+✅ **`_PRE_CONTEXT_1` updated**: added NPC depth rules (unknown=1 sentence, passive=name only, friendly=hints at goal, befriended=reveals secret, ally=full history, rival=stated motivation); HUD format updated to append NPC icons after │ separator when friendly+ NPCs present
+✅ **NPC Memory System**: `memory[]` array capped at 5 entries (oldest dropped); populated on help/gift/join_party/depth events; all 3 last entries injected into LLM context per NPC
+✅ **3 Flask routes**: `POST /npc/create` (dedup by name), `POST /npc/update` (7 event types: interaction/help/betray/gift/join_party/depth), `GET /npcs`; `_make_npc()` + `_advance_npc_relationship()` helpers
+✅ **NPC detection from narrative**: `extractNpcNamesFromText()` uses 4 regex patterns (name+speech verb, speech verb+name, encounter+name, narrator introduction); `NPC_NAME_EXCLUSIONS` dict filters ~50 common capitalized non-name words; `detectNpcEventType()` scans NPC-relevant sentences for join/betray/help/gift keywords
+✅ **Location extraction**: `extractCurrentLocation()` parses `[Location > ...]` from LLM HUD line; passed to create/update calls
+✅ **`detectNarrativeNPCs()`**: called after every LLM response; creates new NPCs with chat notification ("👤 New character encountered: Name"), bumps interaction count on existing NPCs; async loop to avoid race conditions
+✅ **NPC HUD**: LLM instructed in Pre-Context 1 to append `│ Name🤝 Name2⭐ Name3🔴` to HUD line when friendly+ NPCs exist; icons per relationship state
+✅ **👥 Known Characters panel**: collapsible `<details>` section in character sheet after Skills; shows icon + name + interaction count + last location; depth bar (◆◆◇◇◇); last 2 memory entries; hidden when no NPCs known
+✅ **Save/load**: `npcs` dict included in `saveGame()` and `autoSave()` payloads; restored in `loadGame()`; `_npcs = {}` on `startGame()` and `resetGame()`
+✅ **KNOWN CHARACTERS context block**: `buildInventoryContext()` appends full NPC roster with relationship, interaction count, last location, and last 3 memory entries per NPC
+✅ **Commit**: 1c1701a — pushed to origin main
 
 ### v0.12.37 — auto-equip starting inventory + item condition + state tracking (dashboard)
 ✅ **STARTING_ITEMS table**: all 4 genres × all subtypes → starting equipment per class with slot + stat_effects
@@ -939,4 +954,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol — daemon v0.12.18 (both nodes), dashboard v0.12.37 (node1 only). Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard, distributed CA (Root → Intermediate → Compute Node, Shamir K-of-N), clock verification (4-step NTP guard). Dashboard (node1 only): multi-genre text adventure at /game (Fantasy/Sci-Fi/Action/ComedyDrama), D&D-style 4d6 stat rolling with subtype modifiers, three-layer LLM context (universal rules + genre rules + custom), per-class starting inventory auto-equipped on game start, item condition + state tracking (0–100% condition, broken/lost/missing states), per-user save isolation under ~/vernex/config/game_saves/<user_id>/, Google OAuth via vernex.net relay, GPU gauge (RTX 3070). Update scripts: node1 = vernex-bootstrap-setup.sh, node2 = vernex-node-setup.sh. Patent pending US App. 64/015,885, deadline March 24 2027.*
+*Vernex Protocol — daemon v0.12.18 (both nodes), dashboard v0.12.38 (node1 only). Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard, distributed CA (Root → Intermediate → Compute Node, Shamir K-of-N), clock verification (4-step NTP guard). Dashboard (node1 only): multi-genre text adventure at /game (Fantasy/Sci-Fi/Action/ComedyDrama), D&D-style 4d6 stat rolling with subtype modifiers, three-layer LLM context (universal rules + genre rules + custom), per-class starting inventory auto-equipped on game start, item condition + state tracking (0–100% condition, broken/lost/missing states), NPC relationship system (7 states, depth tracking, memory, narrative detection), per-user save isolation under ~/vernex/config/game_saves/<user_id>/, Google OAuth via vernex.net relay, GPU gauge (RTX 3070). Update scripts: node1 = vernex-bootstrap-setup.sh, node2 = vernex-node-setup.sh. Patent pending US App. 64/015,885, deadline March 24 2027.*
