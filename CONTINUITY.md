@@ -4,15 +4,34 @@
 June 7, 2026 (End of Session)
 
 ## Current Version
-v0.12.39
+v0.12.40
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
-| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ (daemon); v0.12.33 dashboard |
+| vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ (daemon); v0.12.40 dashboard |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-07)
+
+### v0.12.40 — Party formation + team dynamics system (dashboard)
+✅ **`_party` client state**: `{members[], capacity, team_dynamics_bonus, group_combat_power}` — init on startGame, reset on resetGame, included in save/load
+✅ **`PARTY_CAPACITY`**: 4 for fantasy/scifi/comedy, 6 for action
+✅ **`PARTY_COMBO_STATS`**: genre stat pairs used for group combat power (fantasy: Magic+Strength; scifi: Intelligence+Tech Skill; action: Strength+Cunning; comedy: Wit+Charm)
+✅ **`_PARTY_CAPACITY` + `_COMBO_STATS`**: Python constants mirroring client; used by calc helpers and party routes
+✅ **`_calc_team_dynamics(s)`**: diversity bonus (−0.10 to +0.25 based on unique class tokens including player), weakness offset (+0.05 per player weakness covered by NPC with >12 stat), duplicate penalty (−0.05 per same-class NPC); clamped to [−0.15, +0.40]
+✅ **`_calc_group_power(s, dynamics_bonus)`**: sums combo stat pair across player (via `_eff_stat`) + all party NPCs (from `npc.stats`); multiplied by `(1 + dynamics_bonus)`
+✅ **Party routes** (3 new Flask endpoints): `POST /party/add`, `POST /party/remove`, `GET /party` — all recalculate dynamics + group power on mutation
+✅ **`api_npc_recruit` updated**: auto-adds ally NPC to party if capacity allows; returns `auto_party_added`, `party`, `team_dynamics_bonus`, `group_combat_power` in response
+✅ **`addToParty(npcId)`**: calls `/party/add`; shows group power notification; capacity guard (warns if full)
+✅ **`removeFromParty(npcId)`**: calls `/party/remove`; updates `_party` + re-renders char sheet
+✅ **`refreshPartyState(d)`**: updates `_party` from any server response with `{party, team_dynamics_bonus, group_combat_power, capacity}` fields
+✅ **`attemptRecruitment` updated**: calls `refreshPartyState(d)` when server response includes party data (server now auto-adds to party on ally outcomes)
+✅ **⚔️ Party panel** in char sheet: between Skills and Known Characters; collapsible `<details>`; shows member name + combo stats + remove button; dynamics bar + group power display; "No party members" prompt when empty
+✅ **PARTY context block** in `buildInventoryContext()`: appended after KNOWN CHARACTERS; shows capacity, dynamics %, each member + combo stats, group combat power
+✅ **Party CSS**: `.cs-party-row`, `.cs-party-name`, `.cs-party-subtype`, `.cs-party-stats`, `.cs-party-remove`, `.cs-dynamics-bar`, `.cs-dynamics-fill` added to app.py template
+
+
 
 ### v0.12.39 — NPC recruitment + stat roll + rival + talk-down system (dashboard)
 ✅ **NPC stat rolling**: 4d6 drop-lowest per stat; triggered on first recruit attempt or rival creation; `_roll_4d6_drop_lowest()` + `_roll_npc_stats(genre)` helpers; stored in `npc.stats`, `npc.stats_rolled=true`

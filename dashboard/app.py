@@ -51,7 +51,7 @@ def get_nodes() -> dict:
         _peers_last_fetch = now
         return dict(nodes)
 
-def _get_daemon_version(fallback: str = "v0.12.37") -> str:
+def _get_daemon_version(fallback: str = "v0.12.40") -> str:
     try:
         r = requests.get(f"{LOCAL_URL}/status", timeout=2, verify=False)
         v = r.json().get("version", "")
@@ -903,6 +903,15 @@ details[open]>summary::before{transform:rotate(90deg)}
 .cs-npc-depth{font-size:.64rem;color:#5a6a7e;letter-spacing:1px;margin-top:1px}
 .cs-npc-mem{font-size:.60rem;color:#3d5070;margin-top:1px;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cs-npc-stats{font-size:.60rem;color:#8892a4;margin-top:2px;font-family:'Courier New',monospace;letter-spacing:.03em}
+.cs-party-row{display:flex;align-items:center;gap:5px;padding:3px 0;border-bottom:1px solid #161b22;font-size:.70rem}
+.cs-party-row:last-child{border-bottom:none}
+.cs-party-name{font-weight:600;flex:0 0 auto;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cs-party-subtype{font-size:.60rem;color:#5a6a7e;flex:0 0 auto}
+.cs-party-stats{font-size:.60rem;color:#8892a4;font-family:'Courier New',monospace;flex:1;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cs-party-remove{background:transparent;border:1px solid #3d1a1a;color:#f85149;border-radius:3px;padding:1px 4px;font-size:.58rem;cursor:pointer;font-family:inherit;flex-shrink:0}
+.cs-party-remove:hover{background:#f85149;color:#0d1117}
+.cs-dynamics-bar{display:flex;height:4px;background:#161b22;border-radius:2px;overflow:hidden;margin-top:3px;margin-bottom:2px}
+.cs-dynamics-fill{height:100%;border-radius:2px;transition:width .3s}
 .msg.system{background:#1a1600;border:1px solid #3d2e00;align-self:stretch;font-size:.82rem;font-family:'Courier New',monospace;padding:8px 12px}
 .msg.system p{margin:.3em 0}
 .lvl-choices{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
@@ -1865,6 +1874,75 @@ _NPC_STAT_NAMES: dict = {
     "comedy":  ["Charisma", "Wit", "Luck", "Clumsiness", "Charm", "Stubbornness"],
 }
 
+_PARTY_CAPACITY: dict = {"fantasy": 4, "scifi": 4, "action": 6, "comedy": 4}
+
+_COMBO_STATS: dict = {
+    "fantasy": ("Strength", "Magic"),
+    "scifi":   ("Intelligence", "Tech Skill"),
+    "action":  ("Strength", "Cunning"),
+    "comedy":  ("Wit", "Charm"),
+}
+
+
+def _calc_team_dynamics(s: dict) -> float:
+    genre = s.get("genre", "fantasy")
+    npcs = s.get("npcs", {})
+    party_ids = s.get("party", [])
+    player_subtype = s.get("subtype", "") or ""
+    stats = s.get("stats", {})
+    equipped = s.get("equipped", {})
+    party_npcs = [npcs[nid] for nid in party_ids if nid in npcs]
+
+    # Diversity bonus: unique class tokens across player + all party members
+    tokens: set = set()
+    tokens.add(player_subtype if player_subtype else "player")
+    for npc in party_npcs:
+        token = npc.get("subtype") or npc.get("class") or npc["id"]
+        tokens.add(token)
+    n = len(tokens)
+    if n >= 4:
+        bonus = 0.25
+    elif n == 3:
+        bonus = 0.10
+    elif n == 2:
+        bonus = 0.00
+    else:
+        bonus = -0.10
+
+    # Weakness offset: +0.05 per player weakness covered by a party NPC with >12 in that stat
+    for stat_name in _NPC_STAT_NAMES.get(genre, _NPC_STAT_NAMES["fantasy"]):
+        player_val = _eff_stat(stats, equipped, stat_name)
+        if player_val < 8 and any(
+            int(npc.get("stats", {}).get(stat_name, 8) or 8) > 12
+            for npc in party_npcs if npc.get("stats_rolled")
+        ):
+            bonus += 0.05
+
+    # Duplicate penalty: -0.05 per party member sharing the player's subtype
+    if player_subtype:
+        dups = sum(1 for npc in party_npcs
+                   if (npc.get("subtype") or npc.get("class") or "") == player_subtype)
+        bonus -= 0.05 * dups
+
+    return round(max(-0.15, min(0.40, bonus)), 4)
+
+
+def _calc_group_power(s: dict, dynamics_bonus: float) -> int:
+    genre = s.get("genre", "fantasy")
+    npcs = s.get("npcs", {})
+    party_ids = s.get("party", [])
+    stats = s.get("stats", {})
+    equipped = s.get("equipped", {})
+    stat_a, stat_b = _COMBO_STATS.get(genre, ("Strength", "Magic"))
+
+    total = _eff_stat(stats, equipped, stat_a) + _eff_stat(stats, equipped, stat_b)
+    for nid in party_ids:
+        npc = npcs.get(nid, {})
+        npc_stats = npc.get("stats", {})
+        total += int(npc_stats.get(stat_a, 8) or 8) + int(npc_stats.get(stat_b, 8) or 8)
+
+    return round(total * (1 + dynamics_bonus))
+
 
 def _roll_4d6_drop_lowest() -> int:
     rolls = [random.randint(1, 6) for _ in range(4)]
@@ -2067,9 +2145,25 @@ def api_npc_recruit(save_id):
         outcome = "fail"
 
     s["npcs"] = npcs
+
+    # Auto-add ally to party if there's capacity
+    auto_party_added = False
+    party = s.get("party", [])
+    genre_cap = _PARTY_CAPACITY.get(s.get("genre", "fantasy"), 4)
+    if npc.get("relationship") == "ally" and npc_id not in party and len(party) < genre_cap:
+        party.append(npc_id)
+        s["party"] = party
+        auto_party_added = True
+
+    dyn = _calc_team_dynamics(s)
+    s["team_dynamics_bonus"] = dyn
+    gcp = _calc_group_power(s, dyn)
     _write_save_record(save_id, uid, s)
     return jsonify({"outcome": outcome, "npc": npc, "npc_stats": npc["stats"],
-                    "player_score": player_score, "npc_charisma": int(npc_cha)})
+                    "player_score": player_score, "npc_charisma": int(npc_cha),
+                    "auto_party_added": auto_party_added,
+                    "party": party, "team_dynamics_bonus": dyn,
+                    "group_combat_power": gcp, "capacity": genre_cap})
 
 
 @app.route("/api/game/saves/<save_id>/npc/talkdown", methods=["POST"])
@@ -2142,6 +2236,75 @@ def api_npc_rival(save_id):
     s["npcs"] = npcs
     _write_save_record(save_id, uid, s)
     return jsonify({"ok": True, "npc": npc, "npc_stats": npc["stats"]})
+
+
+# ── Party routes ───────────────────────────────────────────────────────────────
+
+@app.route("/api/game/saves/<save_id>/party/add", methods=["POST"])
+def api_party_add(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    npc_id = body.get("npc_id")
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    npcs = s.get("npcs", {})
+    npc = npcs.get(npc_id)
+    if npc is None:
+        return jsonify({"error": "npc not found"}), 404
+    if npc.get("relationship") != "ally":
+        return jsonify({"error": "npc must be an ally to join the party"}), 400
+
+    genre = s.get("genre", "fantasy")
+    cap = _PARTY_CAPACITY.get(genre, 4)
+    party = s.get("party", [])
+    if npc_id not in party:
+        if len(party) >= cap:
+            return jsonify({"error": "party is full", "capacity": cap}), 400
+        party.append(npc_id)
+    s["party"] = party
+    dyn = _calc_team_dynamics(s)
+    s["team_dynamics_bonus"] = dyn
+    gcp = _calc_group_power(s, dyn)
+    _write_save_record(save_id, uid, s)
+    return jsonify({"ok": True, "party": party, "team_dynamics_bonus": dyn,
+                    "group_combat_power": gcp, "capacity": cap})
+
+
+@app.route("/api/game/saves/<save_id>/party/remove", methods=["POST"])
+def api_party_remove(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    npc_id = body.get("npc_id")
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+
+    party = [nid for nid in s.get("party", []) if nid != npc_id]
+    s["party"] = party
+    genre = s.get("genre", "fantasy")
+    cap = _PARTY_CAPACITY.get(genre, 4)
+    dyn = _calc_team_dynamics(s)
+    s["team_dynamics_bonus"] = dyn
+    gcp = _calc_group_power(s, dyn)
+    _write_save_record(save_id, uid, s)
+    return jsonify({"ok": True, "party": party, "team_dynamics_bonus": dyn,
+                    "group_combat_power": gcp, "capacity": cap})
+
+
+@app.route("/api/game/saves/<save_id>/party", methods=["GET"])
+def api_party_get(save_id):
+    uid = _user_id(_get_current_user())
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    genre = s.get("genre", "fantasy")
+    cap = _PARTY_CAPACITY.get(genre, 4)
+    party = s.get("party", [])
+    dyn = s.get("team_dynamics_bonus", 0.0)
+    gcp = _calc_group_power(s, dyn)
+    return jsonify({"party": party, "team_dynamics_bonus": dyn,
+                    "group_combat_power": gcp, "capacity": cap})
 
 
 @app.route("/api/game/saves/<save_id>/combat/start", methods=["POST"])

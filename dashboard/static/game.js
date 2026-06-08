@@ -128,6 +128,8 @@ var STAT_ABBREV = {
   'Intelligence':'INT','Tech Skill':'TEC','Endurance':'END','Cunning':'CUN',
   'Wit':'WIT','Clumsiness':'CLU','Charm':'CHR','Stubbornness':'STU'
 };
+var PARTY_CAPACITY = {fantasy:4, scifi:4, action:6, comedy:4};
+var PARTY_COMBO_STATS = {fantasy:['Magic','Strength'], scifi:['Intelligence','Tech Skill'], action:['Strength','Cunning'], comedy:['Wit','Charm']};
 
 var STARTING_ITEMS = {
   fantasy: {
@@ -204,6 +206,7 @@ var _playerHealth = null, _playerMaxHealth = null;
 var _inCombat = false, _combatEnemy = null;
 var _enemiesDefeated = 0, _bossesDefeated = 0;
 var _npcs = {};  // id → npc object
+var _party = {members: [], capacity: 4, team_dynamics_bonus: 0.0, group_combat_power: 0};
 
 // ── View management ───────────────────────────────────────────
 function showView(v) {
@@ -456,6 +459,7 @@ async function startGame() {
   _inventory = {equipped: {}, bag: [], bag_capacity: 5};
   _level = 1; _levelXp = 0; _skillUses = {}; _skillRanks = {};
   _pendingLootItem = null; _npcs = {};
+  _party = {members: [], capacity: PARTY_CAPACITY[_genre] || 4, team_dynamics_bonus: 0.0, group_combat_power: 0};
   recalcItemBonuses();
   _playerMaxHealth = computeMaxHealth();
   _playerHealth = _playerMaxHealth;
@@ -606,6 +610,25 @@ function buildInventoryContext() {
     });
   }
 
+  // Party roster
+  var partyNpcs = _party.members.map(function(id) { return _npcs[id]; }).filter(Boolean);
+  if (partyNpcs.length) {
+    var partyCap = _party.capacity;
+    var dynPct = Math.round(_party.team_dynamics_bonus * 100);
+    var dynStr = (dynPct >= 0 ? '+' : '') + dynPct + '%';
+    var comboStats = PARTY_COMBO_STATS[_character.genre] || PARTY_COMBO_STATS['fantasy'];
+    lines.push('\nPARTY (' + partyNpcs.length + '/' + partyCap + ', Dynamics: ' + dynStr + '):');
+    partyNpcs.forEach(function(npc) {
+      var subtype = npc.subtype || '';
+      var statsStr = comboStats.map(function(stat) {
+        var v = (npc.stats || {})[stat] || '?';
+        return (STAT_ABBREV[stat] || stat.slice(0,3).toUpperCase()) + ':' + v;
+      }).join(' ');
+      lines.push('  - ' + npc.name + (subtype ? ' [' + subtype + ']' : '') + ' ' + statsStr);
+    });
+    lines.push('  Group Combat Power: ' + _party.group_combat_power);
+  }
+
   return lines.join('\n');
 }
 
@@ -731,6 +754,41 @@ function renderCharSheet() {
     html += '</div>';
   }
 
+  // Party panel
+  var partyNpcs = _party.members.map(function(id) { return _npcs[id]; }).filter(Boolean);
+  var partyCap = _party.capacity || (PARTY_CAPACITY[genre] || 4);
+  var dynBonus = _party.team_dynamics_bonus;
+  var dynPct = Math.round(dynBonus * 100);
+  var dynLabel = (dynPct >= 0 ? '+' : '') + dynPct + '%';
+  var dynColor = dynPct > 0 ? '#3fb950' : dynPct < 0 ? '#f85149' : '#8892a4';
+  var dynBarPct = Math.round(Math.min(100, Math.max(0, (dynBonus + 0.15) / 0.55 * 100)));
+  var comboStats = PARTY_COMBO_STATS[genre] || PARTY_COMBO_STATS['fantasy'];
+  html += '<div class="cs-section"><details><summary class="cs-section-hdr" style="cursor:pointer;user-select:none;display:flex;align-items:center">⚔️ Party ('
+    + partyNpcs.length + '/' + partyCap + ')'
+    + (partyNpcs.length ? '<span style="margin-left:auto;font-size:.60rem;color:' + dynColor + '">' + dynLabel + '</span>' : '')
+    + '</summary>';
+  if (partyNpcs.length) {
+    partyNpcs.forEach(function(npc) {
+      if (!npc) return;
+      var subtype = npc.subtype || '';
+      var statsStr = comboStats.map(function(stat) {
+        var v = (npc.stats || {})[stat] || '?';
+        return (STAT_ABBREV[stat] || stat.slice(0,3).toUpperCase()) + ':' + v;
+      }).join(' ');
+      html += '<div class="cs-party-row">'
+        + '<span class="cs-party-name">🟢 ' + escHtml(npc.name) + '</span>'
+        + (subtype ? '<span class="cs-party-subtype">' + escHtml(subtype) + '</span>' : '')
+        + '<span class="cs-party-stats">' + escHtml(statsStr) + '</span>'
+        + '<button class="cs-party-remove" data-party-remove="' + npc.id + '" title="Remove from party">✕</button>'
+        + '</div>';
+    });
+    html += '<div class="cs-dynamics-bar"><div class="cs-dynamics-fill" style="width:' + dynBarPct + '%;background:' + dynColor + '"></div></div>';
+    html += '<div style="font-size:.60rem;color:#5a6a7e;margin-top:2px">Group Power: ' + _party.group_combat_power + '</div>';
+  } else {
+    html += '<div style="font-size:.66rem;color:#3d4d5e;padding:4px 0">No party members yet. Recruit an ally to form a party.</div>';
+  }
+  html += '</details></div>';
+
   // Known Characters (NPC panel)
   var npcList = Object.values(_npcs);
   if (npcList.length) {
@@ -774,6 +832,9 @@ function renderCharSheet() {
         doDrop(btn.getAttribute('data-drop-id'));
       }
     });
+  });
+  document.querySelectorAll('[data-party-remove]').forEach(function(btn) {
+    btn.addEventListener('click', function() { removeFromParty(btn.getAttribute('data-party-remove')); });
   });
 }
 
@@ -1335,7 +1396,11 @@ async function attemptRecruitment(npc, speechText) {
     } else {
       appendSystemMsg('❌ **' + escHtml(npc.name) + '** declines. (Their Charisma ' + d.npc_charisma + ' > your score ' + d.player_score + '). Try again with higher Charisma or a better speech.');
     }
-    if (d.npc) { _npcs[d.npc.id] = d.npc; renderCharSheet(); }
+    if (d.npc) {
+      _npcs[d.npc.id] = d.npc;
+      if (d.party) refreshPartyState(d);
+      renderCharSheet();
+    }
   } catch(e) {}
 }
 
@@ -1366,6 +1431,52 @@ async function markNpcRival(npcId) {
     });
     var d = await r.json();
     if (d.npc) { _npcs[d.npc.id] = d.npc; renderCharSheet(); }
+  } catch(e) {}
+}
+
+// ── Party system ─────────────────────────────────────────────
+function refreshPartyState(d) {
+  _party.members = d.party || [];
+  _party.team_dynamics_bonus = d.team_dynamics_bonus || 0.0;
+  _party.group_combat_power = d.group_combat_power || 0;
+  if (d.capacity) _party.capacity = d.capacity;
+}
+
+async function addToParty(npcId) {
+  if (!_currentSaveId) return;
+  if (_party.members.indexOf(npcId) >= 0) return;
+  var cap = _party.capacity;
+  if (_party.members.length >= cap) {
+    appendSystemMsg('⚠️ Party is full (' + cap + '/' + cap + '). Remove a member first.');
+    return;
+  }
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/party/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({npc_id: npcId})
+    });
+    var d = await r.json();
+    if (d.error) { appendSystemMsg('⚠️ ' + d.error); return; }
+    refreshPartyState(d);
+    renderCharSheet();
+    var npc = _npcs[npcId];
+    if (npc) appendSystemMsg('⚔️ **' + escHtml(npc.name) + '** joins your party! (Group Power: ' + d.group_combat_power + ')');
+  } catch(e) {}
+}
+
+async function removeFromParty(npcId) {
+  if (!_currentSaveId) return;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/party/remove', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({npc_id: npcId})
+    });
+    var d = await r.json();
+    if (d.error) return;
+    refreshPartyState(d);
+    renderCharSheet();
+    var npc = _npcs[npcId];
+    if (npc) appendSystemMsg('🛾 **' + escHtml(npc.name) + '** leaves the party.');
   } catch(e) {}
 }
 
@@ -1556,6 +1667,7 @@ function resetGame() {
   _inCombat = false; _combatEnemy = null;
   _enemiesDefeated = 0; _bossesDefeated = 0;
   _npcs = {};
+  _party = {members: [], capacity: 4, team_dynamics_bonus: 0.0, group_combat_power: 0};
   removeCombatPanel(); updateHealthBar();
   document.getElementById('prompt').disabled = true;
   document.getElementById('submit-btn').disabled = true;
@@ -1596,7 +1708,8 @@ async function saveGame(name, id) {
     current_health: _playerHealth, max_health: _playerMaxHealth,
     in_combat: _inCombat, enemy_state: _combatEnemy,
     enemies_defeated: _enemiesDefeated, bosses_defeated: _bossesDefeated,
-    npcs: _npcs
+    npcs: _npcs, party: _party.members,
+    team_dynamics_bonus: _party.team_dynamics_bonus
   };
   try {
     var url = id ? '/api/game/saves/' + id : '/api/game/saves';
@@ -1624,7 +1737,8 @@ async function autoSave() {
     current_health: _playerHealth, max_health: _playerMaxHealth,
     in_combat: _inCombat, enemy_state: _combatEnemy,
     enemies_defeated: _enemiesDefeated, bosses_defeated: _bossesDefeated,
-    npcs: _npcs
+    npcs: _npcs, party: _party.members,
+    team_dynamics_bonus: _party.team_dynamics_bonus
   };
   try {
     await fetch('/api/game/saves/autosave-' + _character.genre, {
@@ -1683,6 +1797,12 @@ async function loadGame(id) {
     _enemiesDefeated = s.enemies_defeated || 0;
     _bossesDefeated = s.bosses_defeated || 0;
     _npcs = s.npcs || {};
+    _party = {
+      members: s.party || [],
+      capacity: PARTY_CAPACITY[s.genre] || 4,
+      team_dynamics_bonus: s.team_dynamics_bonus || 0.0,
+      group_combat_power: 0
+    };
     removeCombatPanel(); updateHealthBar();
     renderCharSheet();
     showView('view-play');
