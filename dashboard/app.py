@@ -666,11 +666,24 @@ _GAME_OPENINGS = {
 _PRE_CONTEXT_1 = """\
 UNIVERSAL GAME RULES (follow strictly on every turn):
 - Responses must be 2-3 lines maximum — never exceed this. Brevity keeps engagement high.
-- HUD format (single line, mandatory every response): [Location > Sublocation] HP:X/Y LVL:N STAT:N
+- HUD format (mandatory every response — one line):
+  [Location > Sublocation] HP:X/Y LVL:N STAT:N
+  If player has any friendly/befriended/ally/rival NPCs, append after a │ separator:
+  [Location > Sublocation] HP:X/Y LVL:N │ Name🤝 Name2⭐ Name3🔴
+  Relationship icons: 🤝 friendly  ⭐ befriended  🟢 ally  🔴 rival  ��� neutral
+  (Do not show 👤 passive NPCs in HUD — too many would clutter the line)
 - Reference at least one character stat naturally in every response (e.g. "Your Charisma of 18 makes the guard hesitate").
 - Track skill expression quality 1-4 silently. Every 5 quality uses of the same skill: announce stat +1 increase.
 - Every 5 total stat increases: trigger level up. Announce it clearly.
-- NPCs gain depth ONLY when player shows direct interest. Start shallow, build slowly over interactions.
+- NPC DEPTH RULES (follow strictly — depth earned only through player interest):
+  Unknown NPC: one sentence only, no name given yet.
+  Passive NPC: has a name, one sentence basic description.
+  Friendly NPC: has a name, hints at a personal goal or backstory element.
+  Befriended NPC: reveals a secret or deeper personal story, remembers shared history.
+  Ally NPC: full character depth, references all shared history and memories in every appearance.
+  Rival NPC: has a clear stated motivation for opposing the player.
+  Never add depth to NPCs the player has shown no interest in.
+  Always reference NPC relationship state and memory when they reappear.
 - Maintain strict consistency — never forget established items, NPCs, stats, or locations.
 - Items equipped always affect stats in combat and skill checks.
 - Enemy stats scale with player level.
@@ -871,6 +884,14 @@ details[open]>summary::before{transform:rotate(90deg)}
 .cs-skill-row{display:flex;align-items:center;gap:5px;padding:2px 0;font-size:.66rem;color:#8892a4}
 .cs-skill-track{background:#161b22;border-radius:2px;height:3px;width:32px;overflow:hidden;flex-shrink:0}
 .cs-skill-fill{height:100%;background:#1f6feb;border-radius:2px}
+.cs-npc-row{padding:4px 0;border-bottom:1px solid #161b22}
+.cs-npc-row:last-child{border-bottom:none}
+.cs-npc-top{display:flex;align-items:center;gap:5px;font-size:.71rem}
+.cs-npc-name{font-weight:600;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
+.cs-npc-cnt{font-size:.62rem;color:#5a6a7e;flex-shrink:0}
+.cs-npc-loc{font-size:.62rem;color:#3d5070;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70px}
+.cs-npc-depth{font-size:.64rem;color:#5a6a7e;letter-spacing:1px;margin-top:1px}
+.cs-npc-mem{font-size:.60rem;color:#3d5070;margin-top:1px;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .msg.system{background:#1a1600;border:1px solid #3d2e00;align-self:stretch;font-size:.82rem;font-family:'Courier New',monospace;padding:8px 12px}
 .msg.system p{margin:.3em 0}
 .lvl-choices{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
@@ -1822,6 +1843,129 @@ def api_inventory_repair(save_id):
             _write_save_record(save_id, uid, s)
             return jsonify({"ok": True, "condition": 100})
     return jsonify({"error": "item not found"}), 404
+
+
+# ── NPC helpers ────────────────────────────────────────────────────────────────
+
+def _make_npc(name: str, location: str = "") -> dict:
+    return {
+        "id": str(_uuid.uuid4())[:8],
+        "name": name,
+        "relationship": "passive",
+        "interactions": 0,
+        "depth_level": 0,
+        "backstory": [],
+        "memory": [],
+        "last_location": location,
+        "stats_rolled": False,
+        "stats": {},
+    }
+
+
+def _advance_npc_relationship(npc: dict) -> None:
+    rel = npc.get("relationship", "passive")
+    if rel in ("ally", "rival", "neutral"):
+        return
+    i = npc.get("interactions", 0)
+    if i >= 5:
+        npc["relationship"] = "befriended"
+    elif i >= 1:
+        npc["relationship"] = "friendly"
+    else:
+        npc["relationship"] = "passive"
+
+
+@app.route("/api/game/saves/<save_id>/npc/create", methods=["POST"])
+def api_npc_create(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name required"}), 400
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    npcs = s.get("npcs", {})
+    # Deduplicate by name (case-insensitive)
+    for existing in npcs.values():
+        if existing.get("name", "").lower() == name.lower():
+            return jsonify({"ok": True, "npc": existing, "created": False})
+    npc = _make_npc(name, body.get("location", ""))
+    npcs[npc["id"]] = npc
+    s["npcs"] = npcs
+    _write_save_record(save_id, uid, s)
+    return jsonify({"ok": True, "npc": npc, "created": True})
+
+
+@app.route("/api/game/saves/<save_id>/npc/update", methods=["POST"])
+def api_npc_update(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    npc_id = body.get("npc_id")
+    event_type = body.get("event_type", "interaction")
+    interaction_text = (body.get("interaction_text") or "").strip()
+    location = (body.get("location") or "").strip()
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    npcs = s.get("npcs", {})
+    npc = npcs.get(npc_id)
+    if npc is None:
+        return jsonify({"error": "npc not found"}), 404
+
+    if location:
+        npc["last_location"] = location
+
+    if event_type == "interaction":
+        npc["interactions"] = npc.get("interactions", 0) + 1
+    elif event_type == "help":
+        npc["interactions"] = npc.get("interactions", 0) + 1
+        if interaction_text:
+            npc["memory"] = (npc.get("memory") or []) + [interaction_text]
+            npc["memory"] = npc["memory"][-5:]
+    elif event_type == "betray":
+        rel_order = ["unknown", "passive", "friendly", "befriended", "ally"]
+        rel = npc.get("relationship", "passive")
+        idx = rel_order.index(rel) if rel in rel_order else 2
+        npc["relationship"] = "rival" if idx >= 2 else rel_order[max(0, idx - 1)]
+        if interaction_text:
+            npc["memory"] = (npc.get("memory") or []) + [interaction_text]
+            npc["memory"] = npc["memory"][-5:]
+        s["npcs"] = npcs
+        _write_save_record(save_id, uid, s)
+        return jsonify({"ok": True, "npc": npc})
+    elif event_type == "gift":
+        npc["interactions"] = npc.get("interactions", 0) + 1
+        if interaction_text:
+            npc["memory"] = (npc.get("memory") or []) + [interaction_text]
+            npc["memory"] = npc["memory"][-5:]
+    elif event_type == "join_party":
+        npc["relationship"] = "ally"
+        if interaction_text:
+            npc["memory"] = (npc.get("memory") or []) + [interaction_text]
+            npc["memory"] = npc["memory"][-5:]
+        s["npcs"] = npcs
+        _write_save_record(save_id, uid, s)
+        return jsonify({"ok": True, "npc": npc})
+    elif event_type == "depth":
+        npc["depth_level"] = min(5, npc.get("depth_level", 0) + 1)
+        if interaction_text:
+            npc["memory"] = (npc.get("memory") or []) + [interaction_text]
+            npc["memory"] = npc["memory"][-5:]
+
+    _advance_npc_relationship(npc)
+    s["npcs"] = npcs
+    _write_save_record(save_id, uid, s)
+    return jsonify({"ok": True, "npc": npc})
+
+
+@app.route("/api/game/saves/<save_id>/npcs", methods=["GET"])
+def api_npcs_get(save_id):
+    uid = _user_id(_get_current_user())
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"npcs": s.get("npcs", {})})
 
 
 @app.route("/api/game/saves/<save_id>/combat/start", methods=["POST"])

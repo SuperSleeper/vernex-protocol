@@ -95,6 +95,24 @@ var STAMINA_STAT_BY_GENRE = {fantasy:'Stamina', scifi:'Endurance', action:'Stami
 var ITEM_LOSS_WORDS = ['drops','loses','stolen','taken','falls into','destroyed','burns','shatters','trades away','gives to'];
 var ITEM_BREAK_WORDS = ['cracks','breaks','snaps','bent out of shape','badly damaged','worn through','falls apart','torn to pieces'];
 
+var NPC_REL_ICONS = {unknown:'👤', passive:'👤', friendly:'🤝', befriended:'⭐', ally:'🟢', rival:'🔴', neutral:'🟡'};
+var NPC_REL_ORDER = ['unknown','passive','friendly','befriended','ally'];
+var NPC_HELP_WORDS = ['helps','assists','saves','rescues','heals','defends','gives to player','aids','supports'];
+var NPC_BETRAY_WORDS = ['betrayed by player','attacked by player','abandoned by player','player betrays','player attacks'];
+var NPC_GIFT_WORDS = ['gives','offers','hands over','presents','bestows'];
+var NPC_JOIN_WORDS = ['joins the party','joins your party','joins you','agrees to travel','follows you','pledges to help'];
+// Words whose capitalized form we never treat as an NPC name
+var NPC_NAME_EXCLUSIONS = {
+  'The':1,'A':1,'An':1,'You':1,'Your':1,'I':1,'It':1,'He':1,'She':1,'They':1,'We':1,'Our':1,'His':1,'Her':1,
+  'HP':1,'LVL':1,'Level':1,'Class':1,'Status':1,'Player':1,'Enemy':1,'Combat':1,'Attack':1,'Defense':1,
+  'Magic':1,'Skill':1,'Item':1,'Bag':1,'Quest':1,'Game':1,'Turn':1,'Round':1,'Party':1,'Crew':1,'Squad':1,
+  'North':1,'South':1,'East':1,'West':1,'Left':1,'Right':1,'Up':1,'Down':1,'Inside':1,'Outside':1,
+  'Village':1,'Town':1,'City':1,'Forest':1,'Cave':1,'Castle':1,'Tavern':1,'Inn':1,'Market':1,'Temple':1,
+  'Street':1,'Road':1,'Bridge':1,'Gate':1,'Tower':1,'Hall':1,'Shop':1,'Field':1,'River':1,'Mountain':1,
+  'Lord':1,'Lady':1,'King':1,'Queen':1,'Guard':1,'Knight':1,'Merchant':1,'Wizard':1,'Warrior':1,
+  'Captain':1,'General':1,'Master':1,'Elder':1,'Chief':1,'Leader':1
+};
+
 var STARTING_ITEMS = {
   fantasy: {
     'Warrior':    [{name:'Iron Sword',      slot:'weapon',     stat_effects:{Strength:2}},
@@ -169,6 +187,7 @@ var _pendingLootItem = null;
 var _playerHealth = null, _playerMaxHealth = null;
 var _inCombat = false, _combatEnemy = null;
 var _enemiesDefeated = 0, _bossesDefeated = 0;
+var _npcs = {};  // id → npc object
 
 // ── View management ───────────────────────────────────────────
 function showView(v) {
@@ -420,7 +439,7 @@ async function startGame() {
   };
   _inventory = {equipped: {}, bag: [], bag_capacity: 5};
   _level = 1; _levelXp = 0; _skillUses = {}; _skillRanks = {};
-  _pendingLootItem = null;
+  _pendingLootItem = null; _npcs = {};
   recalcItemBonuses();
   _playerMaxHealth = computeMaxHealth();
   _playerHealth = _playerMaxHealth;
@@ -557,6 +576,20 @@ function buildInventoryContext() {
       + ' (HP: ' + _combatEnemy.health + '/' + _combatEnemy.max_health
       + '  DEF: ' + _combatEnemy.defense + '  MGR: ' + _combatEnemy.magic_resist + ')');
   }
+
+  // NPC roster
+  var npcList = Object.values(_npcs);
+  if (npcList.length) {
+    lines.push('\nKNOWN CHARACTERS:');
+    npcList.forEach(function(npc) {
+      var rel = npc.relationship || 'passive';
+      var loc = npc.last_location ? ', last seen: ' + npc.last_location : '';
+      var mem = (npc.memory || []).slice(-3);
+      lines.push('- ' + npc.name + ' [' + rel + ', ' + npc.interactions + ' interactions' + loc + ']');
+      if (mem.length) lines.push('  Memory: ' + mem.join(' | '));
+    });
+  }
+
   return lines.join('\n');
 }
 
@@ -680,6 +713,31 @@ function renderCharSheet() {
         + '</div>';
     });
     html += '</div>';
+  }
+
+  // Known Characters (NPC panel)
+  var npcList = Object.values(_npcs);
+  if (npcList.length) {
+    html += '<div class="cs-section"><details><summary class="cs-section-hdr" style="cursor:pointer;user-select:none">👥 Known Characters (' + npcList.length + ')</summary>';
+    npcList.forEach(function(npc) {
+      var rel = npc.relationship || 'passive';
+      var icon = NPC_REL_ICONS[rel] || '👤';
+      var depth = npc.depth_level || 0;
+      var depthBar = '◆'.repeat(depth) + '◇'.repeat(Math.max(0, 5 - depth));
+      var mem = (npc.memory || []).slice(-2);
+      html += '<div class="cs-npc-row">'
+        + '<div class="cs-npc-top">'
+        + '<span class="cs-npc-name">' + icon + ' ' + escHtml(npc.name) + '</span>'
+        + '<span class="cs-npc-cnt">' + npc.interactions + '×</span>'
+        + (npc.last_location ? '<span class="cs-npc-loc">' + escHtml(npc.last_location) + '</span>' : '')
+        + '</div>'
+        + '<div class="cs-npc-depth">' + depthBar + '</div>';
+      if (mem.length) {
+        html += '<div class="cs-npc-mem">' + escHtml(mem.join(' · ')) + '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</details></div>';
   }
 
   document.getElementById('cs-inner').innerHTML = html;
@@ -1211,6 +1269,113 @@ async function equipStartingInventory() {
   } catch(e) {}
 }
 
+// ── NPC system ───────────────────────────────────────────────
+function _npcByName(name) {
+  var lower = name.toLowerCase();
+  return Object.values(_npcs).find(function(n) { return n.name.toLowerCase() === lower; }) || null;
+}
+
+async function createNPC(name, location) {
+  if (!_currentSaveId) return null;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/npc/create', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, location: location || ''})
+    });
+    var d = await r.json();
+    if (d.ok && d.npc) {
+      _npcs[d.npc.id] = d.npc;
+      renderCharSheet();
+      return d.npc;
+    }
+  } catch(e) {}
+  return null;
+}
+
+async function updateNPCInteraction(npcId, eventType, interactionText, location) {
+  if (!_currentSaveId) return;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/npc/update', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({npc_id: npcId, event_type: eventType || 'interaction',
+        interaction_text: interactionText || '', location: location || ''})
+    });
+    var d = await r.json();
+    if (d.ok && d.npc) {
+      _npcs[npcId] = d.npc;
+      renderCharSheet();
+    }
+  } catch(e) {}
+}
+
+function extractNpcNamesFromText(text) {
+  var names = [];
+  // Name + speech verb: "Seraphina said"
+  var pat1 = /\b([A-Z][a-z]{2,11})\s+(?:says?|said|replies?|replied|asks?|asked|whispers?|whispered|mutters?|muttered|shouts?|shouted|calls?|tells?|greets?|laughs?|sighs?|nods?|smiles?|frowns?)\b/g;
+  // Speech verb + Name: "said Seraphina"
+  var pat2 = /\b(?:says?|said|replied?|replies?|asks?|asked|whispers?|mutters?|shouts?|called|told|greeted)\s+([A-Z][a-z]{2,11})\b/g;
+  // Encounter + Name: "meets Seraphina", "encounters Seraphina"
+  var pat3 = /\b(?:meets?|met|encounters?|encountered|sees?|saw|approaches?|approached|greets?|greeted|introduces?|introduced|named|calls?|known as)\s+([A-Z][a-z]{2,11})\b/g;
+  // "Name, a ..." or "Name —" (narrator introducing)
+  var pat4 = /\b([A-Z][a-z]{2,11}),?\s+(?:a |an |the |—|-\s)/g;
+  var m;
+  while ((m = pat1.exec(text)) !== null) names.push(m[1]);
+  while ((m = pat2.exec(text)) !== null) names.push(m[1]);
+  while ((m = pat3.exec(text)) !== null) names.push(m[1]);
+  while ((m = pat4.exec(text)) !== null) names.push(m[1]);
+  // Deduplicate and filter exclusions
+  var seen = {};
+  return names.filter(function(n) {
+    if (NPC_NAME_EXCLUSIONS[n] || seen[n]) return false;
+    seen[n] = true;
+    return true;
+  });
+}
+
+function detectNpcEventType(text, npcName) {
+  var lower = text.toLowerCase();
+  var nameLower = npcName.toLowerCase();
+  // Only scan sentences containing this NPC's name
+  var sentences = text.split(/[.!?]+/);
+  var relevant = sentences.filter(function(s) { return s.toLowerCase().indexOf(nameLower) >= 0; });
+  if (!relevant.length) return 'interaction';
+  var joined = relevant.join(' ').toLowerCase();
+  if (NPC_JOIN_WORDS.some(function(w) { return joined.indexOf(w) >= 0; })) return 'join_party';
+  if (NPC_BETRAY_WORDS.some(function(w) { return joined.indexOf(w) >= 0; })) return 'betray';
+  if (NPC_HELP_WORDS.some(function(w) { return joined.indexOf(w) >= 0; })) return 'help';
+  if (NPC_GIFT_WORDS.some(function(w) { return joined.indexOf(w) >= 0; })) return 'gift';
+  return 'interaction';
+}
+
+function extractCurrentLocation(text) {
+  // Try to extract location from HUD line: [Location > Sublocation]
+  var m = text.match(/\[([^\]>]+?)(?:\s*>\s*[^\]]+?)?\]/);
+  return m ? m[1].trim() : '';
+}
+
+async function detectNarrativeNPCs(text) {
+  if (!_gameStarted) return;
+  var names = extractNpcNamesFromText(text);
+  var location = extractCurrentLocation(text);
+  for (var i = 0; i < names.length; i++) {
+    var name = names[i];
+    var existing = _npcByName(name);
+    if (!existing) {
+      // New NPC — create entry
+      existing = await createNPC(name, location);
+      if (existing) appendSystemMsg('👤 New character encountered: **' + name + '**');
+    } else {
+      // Existing NPC — detect event type and update
+      var evType = detectNpcEventType(text, name);
+      var memText = '';
+      if (evType === 'join_party') memText = 'joined party at ' + (location || 'unknown location');
+      else if (evType === 'help') memText = 'helped player';
+      else if (evType === 'gift') memText = 'gave item to player';
+      await updateNPCInteraction(existing.id, evType, memText, location);
+    }
+  }
+}
+
 // ── Chat ──────────────────────────────────────────────────────
 async function sendTurn(e) {
   if (e && e.preventDefault) e.preventDefault();
@@ -1237,6 +1402,7 @@ async function sendTurn(e) {
     detectLootDrop(resp);
     handleSkillTracking(resp);
     detectItemNarrativeLoss(resp);
+    detectNarrativeNPCs(resp);
   } catch(err) {
     _history.pop();
     appendMsg('error', 'Request failed: ' + err.message);
@@ -1280,6 +1446,7 @@ function resetGame() {
   _playerHealth = null; _playerMaxHealth = null;
   _inCombat = false; _combatEnemy = null;
   _enemiesDefeated = 0; _bossesDefeated = 0;
+  _npcs = {};
   removeCombatPanel(); updateHealthBar();
   document.getElementById('prompt').disabled = true;
   document.getElementById('submit-btn').disabled = true;
@@ -1319,7 +1486,8 @@ async function saveGame(name, id) {
     level: _level, level_xp: _levelXp, skill_uses: _skillUses, skill_ranks: _skillRanks,
     current_health: _playerHealth, max_health: _playerMaxHealth,
     in_combat: _inCombat, enemy_state: _combatEnemy,
-    enemies_defeated: _enemiesDefeated, bosses_defeated: _bossesDefeated
+    enemies_defeated: _enemiesDefeated, bosses_defeated: _bossesDefeated,
+    npcs: _npcs
   };
   try {
     var url = id ? '/api/game/saves/' + id : '/api/game/saves';
@@ -1346,7 +1514,8 @@ async function autoSave() {
     level: _level, level_xp: _levelXp, skill_uses: _skillUses, skill_ranks: _skillRanks,
     current_health: _playerHealth, max_health: _playerMaxHealth,
     in_combat: _inCombat, enemy_state: _combatEnemy,
-    enemies_defeated: _enemiesDefeated, bosses_defeated: _bossesDefeated
+    enemies_defeated: _enemiesDefeated, bosses_defeated: _bossesDefeated,
+    npcs: _npcs
   };
   try {
     await fetch('/api/game/saves/autosave-' + _character.genre, {
@@ -1404,6 +1573,7 @@ async function loadGame(id) {
     _combatEnemy = _inCombat ? s.enemy_state : null;
     _enemiesDefeated = s.enemies_defeated || 0;
     _bossesDefeated = s.bosses_defeated || 0;
+    _npcs = s.npcs || {};
     removeCombatPanel(); updateHealthBar();
     renderCharSheet();
     showView('view-play');
