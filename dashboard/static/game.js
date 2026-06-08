@@ -538,6 +538,9 @@ function buildInventoryContext() {
     var diff = effVal - base;
     lines.push('  ' + s + ': ' + effVal + (diff !== 0 ? ' (base ' + base + (diff > 0 ? ' +' : ' ') + diff + ')' : ''));
   });
+  var chaKey = _character.genre === 'comedy' ? 'Charm' : 'Charisma';
+  var chaVal = eff[chaKey] || 8;
+  lines.push('EFFECTIVE CHARISMA: ' + chaVal + ' — NPCs with lower Charisma than this value should show deference and reduced resistance.');
 
   var eqLines = SLOTS.map(function(slot) {
     var item = equipped[slot];

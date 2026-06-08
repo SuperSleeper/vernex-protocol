@@ -705,7 +705,17 @@ UNIVERSAL GAME RULES (follow strictly on every turn):
   When player uses talk-down keywords (stand down, talk down, reason with, make peace, settle this):
   Narrate the rival's reaction naturally — the system resolves the check separately.
   Rival NPCs add their Strength to enemy combat — mention this threat if relevant.
-- NPCs remember recruitment attempts — reference a prior failed attempt if the player tries again\
+- NPCs remember recruitment attempts — reference a prior failed attempt if the player tries again
+- NPC COMPLIANCE RULES:
+  NPC argumentativeness and resistance must scale inversely with the gap between player Charisma and NPC Charisma.
+  If player effective Charisma > NPC Charisma by 5+: NPC is noticeably swayed, responds briefly, offers little resistance.
+  If player effective Charisma > NPC Charisma by 10+: NPC is strongly influenced, responds in 1 sentence, compliance is near certain.
+  If player effective Charisma > NPC Charisma by 15+: NPC capitulates immediately, no argument.
+  If player effective Charisma < NPC Charisma: NPC may argue, but still limited to 2-3 lines.
+  NPCs must NEVER deliver lengthy philosophical arguments or monologues regardless of the situation.
+  NPC dialogue is always 1-2 sentences maximum.
+  NPC actions are always 1 sentence maximum.
+  The 2-3 line total response limit applies to ALL content including NPC speech.\
 """
 
 _PRE_CONTEXT_2 = {
@@ -1572,16 +1582,17 @@ def _apply_item_condition(item: dict, change: int) -> dict:
 
 def _eff_stat(stats: dict, equipped: dict, stat_name: str) -> int:
     raw = stats.get(stat_name, 5)
+    # Recalculate item_bonus from equipped on the server — prevents stale saved values
+    item_bonus = sum(
+        int(item.get('stat_effects', {}).get(stat_name, 0) or 0)
+        for item in equipped.values() if item
+    )
     if isinstance(raw, dict):
-        # New multi-component format: item_bonus already computed client-side
-        val = (raw.get('base', 0) + raw.get('item_bonus', 0) +
+        val = (raw.get('base', 0) + item_bonus +
                raw.get('skill_bonus', 0) + raw.get('level_bonus', 0) +
                raw.get('temp_penalty', 0))
     else:
-        val = int(raw) if raw is not None else 5
-        for item in equipped.values():
-            if item:
-                val += item.get('stat_effects', {}).get(stat_name, 0)
+        val = (int(raw) if raw is not None else 5) + item_bonus
     return max(1, val)
 
 

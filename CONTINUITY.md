@@ -4,7 +4,7 @@
 June 7, 2026 (End of Session)
 
 ## Current Version
-v0.12.41
+v0.12.43
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -13,6 +13,12 @@ v0.12.41
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-07)
+
+### v0.12.43 — NPC compliance scales with Charisma gap + NPC dialogue length limit (dashboard)
+✅ **NPC COMPLIANCE RULES added to `_PRE_CONTEXT_1`**: Charisma gap thresholds (5+/10+/15+) govern NPC resistance; NPC dialogue capped at 1-2 sentences; NPC actions 1 sentence max; 2-3 line limit applies to all content including NPC speech; no monologues regardless of situation
+✅ **`buildInventoryContext()` updated**: adds `EFFECTIVE CHARISMA: [value]` line after effective stats block (uses Charm key for comedy genre); LLM sees the player's effective Charisma explicitly for compliance scoring
+✅ **`_eff_stat` fixed**: now always recalculates `item_bonus` from equipped items server-side instead of trusting the saved `item_bonus` value in dict-format stats — prevents stale saves (e.g., +11 Charisma artifact) from persisting
+✅ **Thief Lockpick Set verified**: already `{Charisma:1}` — no change needed; all Thief starting items within ±2 limit (Dagger: AGI+2, Dark Cloak: AGI+1, Lockpick Set: CHA+1)
 
 ### v0.12.41 — Server-side length limit + narrative recruitment + empty response (dashboard)
 ✅ **`_enforce_response_length(content)`**: splits by newline, removes blanks, identifies HUD line (starts with "["), keeps ≤3 content lines + HUD; finds last sentence boundary; appends "▶ [continue]"; skips structured blocks (``` or markdown tables); applied in `api_game_chat` after LLM response
