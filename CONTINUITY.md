@@ -1,10 +1,10 @@
 # Vernex Protocol — Session Continuity
 
 ## Last Updated
-June 7, 2026 (End of Session)
+June 8, 2026 (End of Session)
 
 ## Current Version
-v0.12.45
+v0.12.46
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -13,6 +13,26 @@ v0.12.45
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-08)
+
+### v0.12.46 — PG-13 romance system + jealousy subplot + stat bonuses (dashboard)
+✅ **`_make_npc()` updated**: adds `romance_state` (neutral/interested/flirting/devoted/heartbroken), `romance_interactions`, `romance_ignored_turns`, `jealousy_target` to every new NPC
+✅ **`_romance_bonus(s, stat_name)`**: computes player stat bonus from party NPC romance states — Interested→+1 CHA, Flirting→+1 CHA +1 LCK, Devoted→+2 CHA +1 LCK +1 highest; disabled when romance_enabled=false
+✅ **`_eff_stat()` updated**: accepts optional `extra: int = 0` parameter; romance_bonus passed when called from group power and romance route
+✅ **`_calc_team_dynamics()` updated**: devoted party NPC → +0.08 dynamics; heartbroken → -0.10; active jealousy pair → -0.05 per jealous NPC
+✅ **`_calc_group_power()` updated**: player combo stats computed with romance bonus via `_romance_bonus(s, stat_name)`
+✅ **ROMANCE RULES added to `_PRE_CONTEXT_1`**: PG-13, genre-appropriate (courtly/intellectual/era-accurate/comedic); devoted NPC always responds warmly; heartbroken NPC withdrawn; jealousy as background tension; never explicit
+✅ **`_build_persistent_context()` updated**: extracts ROMANCE SUBPLOTS section from inventory context; appends to persistent context block if any NPC has non-neutral romance state
+✅ **`POST /npc/romance` route**: handles compliment/flirt/devotion/gift triggers; Charisma+speech_quality check for state transitions; jealousy detection when two party NPCs both flirting/devoted; force_state override for heartbreak
+✅ **`GET /npc/romance` route**: returns all NPCs with non-neutral romance state
+✅ **Romance toggle HTML**: `<label class="romance-toggle-label">` with checkbox `id="romance-toggle"` inside Layer 3 `<details>` block; CSS `.romance-toggle-label` + accent-color pink
+✅ **`_romanceEnabled` state var**: initialized in `startGame()` from checkbox; reset to true in `resetGame()`; saved/loaded as `romance_enabled` in save payload; loaded in `loadGame()` with checkbox sync
+✅ **Romance constants**: `ROMANCE_COMPLIMENT_WORDS`, `ROMANCE_FLIRT_WORDS`, `ROMANCE_DEVOTION_WORDS`, `ROMANCE_GIFT_WORDS`, `ROMANCE_ICONS`
+✅ **`detectRomanceIntent(prompt)`**: detects trigger type from keyword lists, finds NPC in text
+✅ **`attemptRomanceAdvance(npc, prompt, trigger)`**: POST to romance route; shows contextual notification per outcome; jealousy announcement; renderCharSheet
+✅ **`checkRomanceIgnore(prompt)`**: for each devoted party NPC not mentioned in prompt, increments `romance_ignored_turns`; at 3 → heartbreak notification + server update
+✅ **`sendTurn()` updated**: romance detection runs after recruit/talkdown block when `_romanceEnabled`
+✅ **`buildInventoryContext()` updated**: NPC lines include romance icon+state tag; ROMANCE SUBPLOTS section appended for non-neutral NPCs with jealousy annotation
+✅ **`renderCharSheet()` updated**: Known Characters panel shows romance icon (💛🩷❤️💔) next to relationship icon; Party panel shows ❤️ for devoted, 💔 for heartbroken members
 
 ### v0.12.45 — Adaptive IQ matching + plot momentum + NPC argument cap (dashboard)
 ✅ **ADAPTIVE IQ SYSTEM**: 4 tiers (Casual/Engaged/Strategic/Advanced) assessed silently from last 3-5 player messages; response complexity, NPC wit, and vocabulary all match player's detected tier; tier never exceeded; drops responded to immediately, rises gradual over 2-3 turns

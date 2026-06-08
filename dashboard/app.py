@@ -51,7 +51,7 @@ def get_nodes() -> dict:
         _peers_last_fetch = now
         return dict(nodes)
 
-def _get_daemon_version(fallback: str = "v0.12.40") -> str:
+def _get_daemon_version(fallback: str = "v0.12.46") -> str:
     try:
         r = requests.get(f"{LOCAL_URL}/status", timeout=2, verify=False)
         v = r.json().get("version", "")
@@ -743,7 +743,18 @@ UNIVERSAL GAME RULES (follow strictly on every turn):
   NPC never repeats the same objection — each pushback must add new story information.
   NPC wit and cleverness must scale DOWN when player Charisma dominates — a dominated NPC does not get to be witty.
   NPC dialogue always 1-2 sentences. NPC action always 1 sentence. No monologues ever.
-  An NPC who is clearly outmatched in Charisma becomes visibly uncomfortable, brief, and compliant — not eloquent.\
+  An NPC who is clearly outmatched in Charisma becomes visibly uncomfortable, brief, and compliant — not eloquent.
+- ROMANCE RULES (apply only when romance is enabled — always PG-13, genre-appropriate):
+  Fantasy: courtly romance — poetic declarations, chivalric gestures, longing glances.
+  Sci-Fi: intellectual romance — shared discovery, trust built across stars, protective loyalty.
+  Action/Historical: era-accurate romance — duty, honor, stolen moments, formal courtship.
+  Comedy: comedic romance — misunderstandings, accidental confessions, slapstick affection.
+  A devoted party NPC always responds warmly to the player — references the shared bond naturally.
+  A heartbroken NPC is withdrawn and brief — avoids eye contact, short replies, gives no warmth.
+  Jealousy subplot: if two NPCs both show romantic interest, they eye each other warily and may
+  compete subtly for player attention or comment on the player's divided loyalty.
+  Romantic tension is a background element — never the sole focus of a response.
+  Never explicit. Never physical beyond a hand touch, a blush, or a longing look.\
 """
 
 _PRE_CONTEXT_2 = {
@@ -864,6 +875,8 @@ details[open]>summary::before{transform:rotate(90deg)}
 .btn-ctx{background:transparent;color:#8892a4;border:1px solid #30363d;border-radius:5px;padding:4px 11px;font-size:.74rem;cursor:pointer;font-family:inherit}
 .btn-ctx:hover{border-color:#58a6ff;color:#58a6ff}
 .ctx-st{font-size:.71rem;color:#3fb950}
+.romance-toggle-label{display:flex;align-items:center;gap:7px;font-size:.74rem;color:#8892a4;padding:7px 2px 2px;cursor:pointer;user-select:none}
+.romance-toggle-label input{cursor:pointer;accent-color:#e85d96}
 /* ── Gameplay ── */
 .cs-panel{background:#16213e;border:1px solid #1f2d45;border-radius:7px;padding:10px 12px;margin-bottom:10px}
 .cs-panel summary{font-size:.8rem;font-weight:600;color:#8892a4}
@@ -1105,6 +1118,7 @@ select{background:#16213e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6
   </details>
   <details style="margin-top:4px">
     <summary>&#9881; Game Context (Layer 3 &#8212; your custom rules)</summary>
+    <label class="romance-toggle-label"><input type="checkbox" id="romance-toggle" checked> &#10084;&#65039; Enable romantic subplots (PG-13)</label>
     <textarea id="game-context" class="ctx-ta" spellcheck="false"></textarea>
     <div class="ctx-note">Layers 1 &amp; 2 (universal + genre rules) are applied automatically above this.</div>
     <div class="ctx-btns">
@@ -1311,6 +1325,25 @@ def _build_persistent_context(messages: list) -> str:
         parts.extend(party_entries)
     else:
         parts.append("ACTIVE PARTY: none")
+
+    # Extract and include romance subplots
+    romance_lines: list[str] = []
+    in_romance = False
+    for line in inv_lines:
+        s = line.strip()
+        if s == "ROMANCE SUBPLOTS:":
+            in_romance = True
+            continue
+        if in_romance:
+            if s.startswith("- ") or "JEALOUSY" in s:
+                romance_lines.append(s)
+            elif s:
+                in_romance = False
+
+    if romance_lines:
+        parts.append("")
+        parts.append("ROMANCE SUBPLOTS:")
+        parts.extend(romance_lines)
 
     parts.append("=== END PERSISTENT CONTEXT ===")
     return "\n".join(parts)
@@ -1754,7 +1787,7 @@ def _apply_item_condition(item: dict, change: int) -> dict:
     return item
 
 
-def _eff_stat(stats: dict, equipped: dict, stat_name: str) -> int:
+def _eff_stat(stats: dict, equipped: dict, stat_name: str, extra: int = 0) -> int:
     raw = stats.get(stat_name, 5)
     # Recalculate item_bonus from equipped on the server — prevents stale saved values
     item_bonus = sum(
@@ -1767,7 +1800,7 @@ def _eff_stat(stats: dict, equipped: dict, stat_name: str) -> int:
                raw.get('temp_penalty', 0))
     else:
         val = (int(raw) if raw is not None else 5) + item_bonus
-    return max(1, val)
+    return max(1, val + extra)
 
 
 def _save_path(save_id: str, user_id: str = "guest") -> str:
@@ -2105,6 +2138,43 @@ _COMBO_STATS: dict = {
 }
 
 
+def _romance_bonus(s: dict, stat_name: str) -> int:
+    """Player stat bonus from party NPC romance states."""
+    if not s.get("romance_enabled", True):
+        return 0
+    genre = s.get("genre", "fantasy")
+    cha_key = "Charm" if genre == "comedy" else "Charisma"
+    # Find player's highest stat
+    stats = s.get("stats", {})
+    highest_stat = cha_key
+    highest_val = 0
+    for k, v in stats.items():
+        val = v.get("base", 0) if isinstance(v, dict) else (int(v) if v is not None else 0)
+        if val > highest_val:
+            highest_val = val
+            highest_stat = k
+    npcs = s.get("npcs", {})
+    party_ids = s.get("party", [])
+    bonus = 0
+    for nid in party_ids:
+        npc = npcs.get(nid, {})
+        rs = npc.get("romance_state", "neutral")
+        if rs == "interested":
+            if stat_name == cha_key:
+                bonus += 1
+        elif rs == "flirting":
+            if stat_name in (cha_key, "Luck"):
+                bonus += 1
+        elif rs == "devoted":
+            if stat_name == cha_key:
+                bonus += 2
+            elif stat_name == "Luck":
+                bonus += 1
+            elif stat_name == highest_stat and stat_name not in (cha_key, "Luck"):
+                bonus += 1
+    return bonus
+
+
 def _calc_team_dynamics(s: dict) -> float:
     genre = s.get("genre", "fantasy")
     npcs = s.get("npcs", {})
@@ -2145,6 +2215,18 @@ def _calc_team_dynamics(s: dict) -> float:
                    if (npc.get("subtype") or npc.get("class") or "") == player_subtype)
         bonus -= 0.05 * dups
 
+    # Romance dynamics adjustments
+    if s.get("romance_enabled", True):
+        for nid in party_ids:
+            npc = npcs.get(nid, {})
+            rs = npc.get("romance_state", "neutral")
+            if rs == "devoted":
+                bonus += 0.08
+            elif rs == "heartbroken":
+                bonus -= 0.10
+            if npc.get("jealousy_target") and npc["jealousy_target"] in party_ids:
+                bonus -= 0.05
+
     return round(max(-0.15, min(0.40, bonus)), 4)
 
 
@@ -2156,7 +2238,8 @@ def _calc_group_power(s: dict, dynamics_bonus: float) -> int:
     equipped = s.get("equipped", {})
     stat_a, stat_b = _COMBO_STATS.get(genre, ("Strength", "Magic"))
 
-    total = _eff_stat(stats, equipped, stat_a) + _eff_stat(stats, equipped, stat_b)
+    total = (_eff_stat(stats, equipped, stat_a, _romance_bonus(s, stat_a)) +
+             _eff_stat(stats, equipped, stat_b, _romance_bonus(s, stat_b)))
     for nid in party_ids:
         npc = npcs.get(nid, {})
         npc_stats = npc.get("stats", {})
@@ -2210,6 +2293,10 @@ def _make_npc(name: str, location: str = "") -> dict:
         "last_location": location,
         "stats_rolled": False,
         "stats": {},
+        "romance_state": "neutral",
+        "romance_interactions": 0,
+        "romance_ignored_turns": 0,
+        "jealousy_target": None,
     }
 
 
@@ -2457,6 +2544,131 @@ def api_npc_rival(save_id):
     s["npcs"] = npcs
     _write_save_record(save_id, uid, s)
     return jsonify({"ok": True, "npc": npc, "npc_stats": npc["stats"]})
+
+
+# ── Romance routes ─────────────────────────────────────────────────────────────
+
+@app.route("/api/game/saves/<save_id>/npc/romance", methods=["POST"])
+def api_npc_romance(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    npc_id = body.get("npc_id")
+    trigger = body.get("trigger", "compliment")  # compliment, flirt, devotion, gift
+    speech_text = body.get("speech_text", "")
+    force_state = body.get("force_state")       # direct override (heartbroken / neutral)
+
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+
+    npcs = s.get("npcs", {})
+    npc = npcs.get(npc_id)
+    if npc is None:
+        return jsonify({"error": "npc not found"}), 404
+
+    if force_state in ("heartbroken", "neutral"):
+        npc["romance_state"] = force_state
+        npc["romance_ignored_turns"] = 0
+        npcs[npc_id] = npc
+        s["npcs"] = npcs
+        dyn = _calc_team_dynamics(s)
+        s["team_dynamics_bonus"] = dyn
+        _write_save_record(save_id, uid, s)
+        return jsonify({"ok": True, "npc": npc, "new_state": force_state,
+                        "outcome": "forced", "team_dynamics_bonus": dyn})
+
+    current_state = npc.get("romance_state", "neutral")
+    genre = s.get("genre", "fantasy")
+    stats = s.get("stats", {})
+    equipped = s.get("equipped", {})
+    cha_key = "Charm" if genre == "comedy" else "Charisma"
+    player_cha = _eff_stat(stats, equipped, cha_key, _romance_bonus(s, cha_key))
+    npc_cha = int(npc.get("stats", {}).get(cha_key, 8) or 8)
+    speech_quality = _eval_speech_quality(speech_text)
+    romance_score = player_cha + speech_quality
+
+    new_state = current_state
+    outcome = "no_change"
+
+    if current_state == "neutral" and trigger in ("compliment", "gift"):
+        new_state = "interested"
+        outcome = "advanced"
+    elif current_state == "interested":
+        if trigger in ("flirt", "gift"):
+            if romance_score >= npc_cha + 2:
+                new_state = "flirting"
+                outcome = "advanced"
+            elif romance_score >= npc_cha:
+                outcome = "deflected"
+            else:
+                outcome = "unimpressed"
+        elif trigger == "compliment":
+            npc["romance_interactions"] = npc.get("romance_interactions", 0) + 1
+            outcome = "acknowledged"
+    elif current_state == "flirting":
+        if trigger == "devotion":
+            if romance_score >= npc_cha + 4:
+                new_state = "devoted"
+                outcome = "advanced"
+            elif romance_score >= npc_cha:
+                outcome = "deflected"
+            else:
+                outcome = "unimpressed"
+        elif trigger in ("flirt", "compliment", "gift"):
+            npc["romance_interactions"] = npc.get("romance_interactions", 0) + 1
+            npc["romance_ignored_turns"] = 0
+            outcome = "acknowledged"
+    elif current_state == "devoted":
+        if trigger in ("flirt", "devotion", "compliment", "gift"):
+            npc["romance_interactions"] = npc.get("romance_interactions", 0) + 1
+            npc["romance_ignored_turns"] = 0
+            outcome = "acknowledged"
+    elif current_state == "heartbroken":
+        if trigger in ("gift", "devotion") and romance_score >= npc_cha + 6:
+            new_state = "interested"
+            outcome = "advanced"
+
+    npc["romance_state"] = new_state
+    npcs[npc_id] = npc
+
+    # Jealousy: check if another party NPC is also flirting/devoted
+    party_ids = s.get("party", [])
+    jealousy_triggered = []
+    if new_state in ("flirting", "devoted"):
+        for other_id in party_ids:
+            if other_id == npc_id:
+                continue
+            other = npcs.get(other_id, {})
+            if other.get("romance_state") in ("flirting", "devoted"):
+                npc["jealousy_target"] = other_id
+                other["jealousy_target"] = npc_id
+                npcs[other_id] = other
+                jealousy_triggered.append({"npc1": npc["name"], "npc2": other["name"]})
+
+    s["npcs"] = npcs
+    dyn = _calc_team_dynamics(s)
+    s["team_dynamics_bonus"] = dyn
+    _write_save_record(save_id, uid, s)
+    return jsonify({"ok": True, "npc": npc, "new_state": new_state, "outcome": outcome,
+                    "jealousy_triggered": jealousy_triggered, "team_dynamics_bonus": dyn})
+
+
+@app.route("/api/game/saves/<save_id>/npc/romance", methods=["GET"])
+def api_npc_romance_get(save_id):
+    uid = _user_id(_get_current_user())
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    npcs = s.get("npcs", {})
+    romantic = {
+        nid: {"name": npc["name"],
+              "romance_state": npc.get("romance_state", "neutral"),
+              "romance_interactions": npc.get("romance_interactions", 0),
+              "jealousy_target": npc.get("jealousy_target")}
+        for nid, npc in npcs.items()
+        if npc.get("romance_state", "neutral") != "neutral"
+    }
+    return jsonify({"ok": True, "romantic_npcs": romantic})
 
 
 # ── Party routes ───────────────────────────────────────────────────────────────

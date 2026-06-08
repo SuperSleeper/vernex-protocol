@@ -115,6 +115,12 @@ var STAT_ABBREV = {
 var PARTY_CAPACITY = {fantasy:4, scifi:4, action:6, comedy:4};
 var PARTY_COMBO_STATS = {fantasy:['Magic','Strength'], scifi:['Intelligence','Tech Skill'], action:['Strength','Cunning'], comedy:['Wit','Charm']};
 
+var ROMANCE_COMPLIMENT_WORDS = ['beautiful','gorgeous','amazing','wonderful','brave','incredible','stunning','remarkable','lovely','radiant','dazzling','magnificent'];
+var ROMANCE_FLIRT_WORDS = ['enchanting','captivating','charming','irresistible','alluring','fascinating','your eyes','your smile','your voice','drawn to you','feel something','feelings for'];
+var ROMANCE_DEVOTION_WORDS = ['love you','in love with','always be by','would die for','my heart','devoted to you','belong together','never leave you','my everything'];
+var ROMANCE_GIFT_WORDS = ['give you','offer you','this is for you','for you alone','made this for','found this for'];
+var ROMANCE_ICONS = {neutral:'', interested:'💛', flirting:'🩷', devoted:'❤️', heartbroken:'💔'};
+
 var STARTING_ITEMS = {
   fantasy: {
     'Warrior':    [{name:'Iron Sword',      slot:'weapon',     stat_effects:{Strength:2}},
@@ -191,6 +197,7 @@ var _inCombat = false, _combatEnemy = null;
 var _enemiesDefeated = 0, _bossesDefeated = 0;
 var _npcs = {};  // id → npc object
 var _party = {members: [], capacity: 4, team_dynamics_bonus: 0.0, group_combat_power: 0};
+var _romanceEnabled = true;
 
 // ── View management ───────────────────────────────────────────
 function showView(v) {
@@ -444,6 +451,8 @@ async function startGame() {
   _level = 1; _levelXp = 0; _skillUses = {}; _skillRanks = {};
   _pendingLootItem = null; _npcs = {};
   _party = {members: [], capacity: PARTY_CAPACITY[_genre] || 4, team_dynamics_bonus: 0.0, group_combat_power: 0};
+  var romToggle = document.getElementById('romance-toggle');
+  _romanceEnabled = romToggle ? romToggle.checked : true;
   recalcItemBonuses();
   _playerMaxHealth = computeMaxHealth();
   _playerHealth = _playerMaxHealth;
@@ -592,8 +601,30 @@ function buildInventoryContext() {
       var rel = npc.relationship || 'passive';
       var loc = npc.last_location ? ', last seen: ' + npc.last_location : '';
       var mem = (npc.memory || []).slice(-3);
-      lines.push('- ' + npc.name + ' [' + rel + ', ' + npc.interactions + ' interactions' + loc + ']');
+      var rs = npc.romance_state || 'neutral';
+      var rsTag = (rs !== 'neutral' && ROMANCE_ICONS[rs]) ? ' ' + ROMANCE_ICONS[rs] + rs.charAt(0).toUpperCase() + rs.slice(1) : '';
+      lines.push('- ' + npc.name + ' [' + rel + ', ' + npc.interactions + ' interactions' + loc + ']' + rsTag);
       if (mem.length) lines.push('  Memory: ' + mem.join(' | '));
+    });
+  }
+
+  // Romance subplots section (parsed by _build_persistent_context on server)
+  var romanticNpcs = npcList.filter(function(npc) { return npc.romance_state && npc.romance_state !== 'neutral'; });
+  if (_romanceEnabled && romanticNpcs.length) {
+    lines.push('\nROMANCE SUBPLOTS:');
+    romanticNpcs.forEach(function(npc) {
+      var rs = npc.romance_state;
+      var icon = ROMANCE_ICONS[rs] || '';
+      var desc = rs === 'devoted' ? 'deeply attached, references your bond naturally'
+               : rs === 'flirting' ? 'shows subtle romantic interest'
+               : rs === 'interested' ? 'shows warm interest'
+               : rs === 'heartbroken' ? 'hurt by neglect, may withdraw support'
+               : '';
+      lines.push('- ' + npc.name + ' ' + icon + ' ' + rs.charAt(0).toUpperCase() + rs.slice(1) + (desc ? ' — ' + desc : ''));
+      if (npc.jealousy_target) {
+        var rival = _npcs[npc.jealousy_target];
+        if (rival) lines.push('  ⚡❤️ JEALOUSY: ' + npc.name + ' is jealous of ' + rival.name);
+      }
     });
   }
 
@@ -762,8 +793,9 @@ function renderCharSheet() {
         var v = (npc.stats || {})[stat] || '?';
         return (STAT_ABBREV[stat] || stat.slice(0,3).toUpperCase()) + ':' + v;
       }).join(' ');
+      var partyRomIcon = npc.romance_state === 'devoted' ? '❤️' : (npc.romance_state === 'heartbroken' ? '💔' : '');
       html += '<div class="cs-party-row">'
-        + '<span class="cs-party-name">🟢 ' + escHtml(npc.name) + '</span>'
+        + '<span class="cs-party-name">🟢' + (partyRomIcon ? partyRomIcon : ' ') + escHtml(npc.name) + '</span>'
         + (subtype ? '<span class="cs-party-subtype">' + escHtml(subtype) + '</span>' : '')
         + '<span class="cs-party-stats">' + escHtml(statsStr) + '</span>'
         + '<button class="cs-party-remove" data-party-remove="' + npc.id + '" title="Remove from party">✕</button>'
@@ -786,9 +818,11 @@ function renderCharSheet() {
       var depth = npc.depth_level || 0;
       var depthBar = '◆'.repeat(depth) + '◇'.repeat(Math.max(0, 5 - depth));
       var mem = (npc.memory || []).slice(-2);
+      var npcRs = npc.romance_state || 'neutral';
+      var npcRomIcon = (npcRs !== 'neutral' && ROMANCE_ICONS[npcRs]) ? ROMANCE_ICONS[npcRs] : '';
       html += '<div class="cs-npc-row">'
         + '<div class="cs-npc-top">'
-        + '<span class="cs-npc-name">' + icon + ' ' + escHtml(npc.name) + '</span>'
+        + '<span class="cs-npc-name">' + icon + (npcRomIcon ? npcRomIcon : '') + ' ' + escHtml(npc.name) + '</span>'
         + '<span class="cs-npc-cnt">' + npc.interactions + '×</span>'
         + (npc.last_location ? '<span class="cs-npc-loc">' + escHtml(npc.last_location) + '</span>' : '')
         + '</div>'
@@ -1638,6 +1672,89 @@ function showRetryButton(prompt, model) {
   scrollToBottom();
 }
 
+// ── Romance system ────────────────────────────────────────────
+function detectRomanceIntent(prompt) {
+  if (!_romanceEnabled) return null;
+  var lower = prompt.toLowerCase();
+  var trigger = null;
+  if (ROMANCE_DEVOTION_WORDS.some(function(w) { return lower.indexOf(w) >= 0; })) trigger = 'devotion';
+  else if (ROMANCE_FLIRT_WORDS.some(function(w) { return lower.indexOf(w) >= 0; })) trigger = 'flirt';
+  else if (ROMANCE_GIFT_WORDS.some(function(w) { return lower.indexOf(w) >= 0; })) trigger = 'gift';
+  else if (ROMANCE_COMPLIMENT_WORDS.some(function(w) { return lower.indexOf(w) >= 0; })) trigger = 'compliment';
+  if (!trigger) return null;
+  var npc = findNpcInText(prompt);
+  if (!npc) return null;
+  return {trigger: trigger, npc: npc};
+}
+
+async function attemptRomanceAdvance(npc, prompt, trigger) {
+  if (!_currentSaveId || !_romanceEnabled) return;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/npc/romance', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({npc_id: npc.id, trigger: trigger, speech_text: prompt})
+    });
+    var d = await r.json();
+    if (!d.ok) return;
+    var prevState = npc.romance_state || 'neutral';
+    _npcs[npc.id] = d.npc;
+    if (d.team_dynamics_bonus !== undefined) _party.team_dynamics_bonus = d.team_dynamics_bonus;
+    var name = escHtml(npc.name);
+    var ns = d.new_state;
+    var msg = '';
+    if (d.outcome === 'advanced' && ns !== prevState) {
+      if (ns === 'interested') msg = (prevState === 'heartbroken')
+        ? '💛 **' + name + '** seems to soften, the hurt fading slowly...'
+        : '💛 **' + name + '**\'s expression softens as they notice your attention...';
+      else if (ns === 'flirting') msg = '🩷 **' + name + '** smiles warmly, clearly charmed by you...';
+      else if (ns === 'devoted') msg = '❤️ **' + name + '** looks at you with unmistakable devotion...';
+    } else if (d.outcome === 'deflected') {
+      msg = '😊 **' + name + '** deflects playfully, though there\'s warmth behind it...';
+    } else if (d.outcome === 'unimpressed') {
+      msg = '😏 **' + name + '** is amused but clearly unimpressed...';
+    }
+    if (msg) appendSystemMsg(msg);
+    if (d.jealousy_triggered && d.jealousy_triggered.length) {
+      d.jealousy_triggered.forEach(function(pair) {
+        appendSystemMsg('⚡❤️ **JEALOUSY SUBPLOT**: ' + escHtml(pair.npc1) + ' and ' + escHtml(pair.npc2) + ' are both vying for your affection!');
+      });
+    }
+    renderCharSheet();
+  } catch(e) {}
+}
+
+async function checkRomanceIgnore(prompt) {
+  if (!_romanceEnabled || !_currentSaveId) return;
+  var devotedNpcs = _party.members.map(function(id) { return _npcs[id]; })
+    .filter(function(npc) { return npc && npc.romance_state === 'devoted'; });
+  for (var i = 0; i < devotedNpcs.length; i++) {
+    var npc = devotedNpcs[i];
+    if (prompt.toLowerCase().indexOf(npc.name.toLowerCase()) < 0) {
+      npc.romance_ignored_turns = (npc.romance_ignored_turns || 0) + 1;
+      if (npc.romance_ignored_turns >= 3) {
+        npc.romance_state = 'heartbroken';
+        npc.romance_ignored_turns = 0;
+        _npcs[npc.id] = npc;
+        appendSystemMsg('💔 **' + escHtml(npc.name) + '** has grown distant, feeling ignored...');
+        try {
+          await fetch('/api/game/saves/' + _currentSaveId + '/npc/romance', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({npc_id: npc.id, force_state: 'heartbroken'})
+          });
+        } catch(e) {}
+        renderCharSheet();
+      } else {
+        _npcs[npc.id] = npc;
+      }
+    } else {
+      npc.romance_ignored_turns = 0;
+      _npcs[npc.id] = npc;
+    }
+  }
+}
+
 // ── Chat ──────────────────────────────────────────────────────
 async function sendTurn(e) {
   if (e && e.preventDefault) e.preventDefault();
@@ -1677,6 +1794,14 @@ async function sendTurn(e) {
       if (talkdownTarget && talkdownTarget.relationship === 'rival') {
         await attemptTalkDown(talkdownTarget, prompt);
       }
+    }
+    // Romance detection (runs after recruit/talkdown — non-exclusive)
+    if (_romanceEnabled) {
+      var romanceIntent = detectRomanceIntent(prompt);
+      if (romanceIntent) {
+        await attemptRomanceAdvance(romanceIntent.npc, prompt, romanceIntent.trigger);
+      }
+      await checkRomanceIgnore(prompt);
     }
   } catch(err) {
     _history.pop();
@@ -1729,6 +1854,7 @@ function resetGame() {
   _enemiesDefeated = 0; _bossesDefeated = 0;
   _npcs = {};
   _party = {members: [], capacity: 4, team_dynamics_bonus: 0.0, group_combat_power: 0};
+  _romanceEnabled = true;
   removeCombatPanel(); updateHealthBar();
   document.getElementById('prompt').disabled = true;
   document.getElementById('submit-btn').disabled = true;
@@ -1770,7 +1896,8 @@ async function saveGame(name, id) {
     in_combat: _inCombat, enemy_state: _combatEnemy,
     enemies_defeated: _enemiesDefeated, bosses_defeated: _bossesDefeated,
     npcs: _npcs, party: _party.members,
-    team_dynamics_bonus: _party.team_dynamics_bonus
+    team_dynamics_bonus: _party.team_dynamics_bonus,
+    romance_enabled: _romanceEnabled
   };
   try {
     var url = id ? '/api/game/saves/' + id : '/api/game/saves';
@@ -1799,7 +1926,8 @@ async function autoSave() {
     in_combat: _inCombat, enemy_state: _combatEnemy,
     enemies_defeated: _enemiesDefeated, bosses_defeated: _bossesDefeated,
     npcs: _npcs, party: _party.members,
-    team_dynamics_bonus: _party.team_dynamics_bonus
+    team_dynamics_bonus: _party.team_dynamics_bonus,
+    romance_enabled: _romanceEnabled
   };
   try {
     await fetch('/api/game/saves/autosave-' + _character.genre, {
@@ -1864,6 +1992,9 @@ async function loadGame(id) {
       team_dynamics_bonus: s.team_dynamics_bonus || 0.0,
       group_combat_power: 0
     };
+    _romanceEnabled = s.romance_enabled !== false;
+    var romToggle = document.getElementById('romance-toggle');
+    if (romToggle) romToggle.checked = _romanceEnabled;
     removeCombatPanel(); updateHealthBar();
     renderCharSheet();
     showView('view-play');
