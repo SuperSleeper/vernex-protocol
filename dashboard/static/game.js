@@ -92,6 +92,74 @@ var COMBAT_ENEMY_PATTERNS = {
 };
 var STAMINA_STAT_BY_GENRE = {fantasy:'Stamina', scifi:'Endurance', action:'Stamina', comedy:'Stubbornness'};
 
+var ITEM_LOSS_WORDS = ['drops','loses','stolen','taken','falls into','destroyed','burns','shatters','trades away','gives to'];
+var ITEM_BREAK_WORDS = ['cracks','breaks','snaps','bent out of shape','badly damaged','worn through','falls apart','torn to pieces'];
+
+var STARTING_ITEMS = {
+  fantasy: {
+    'Warrior':    [{name:'Iron Sword',      slot:'weapon',     stat_effects:{Strength:2}},
+                   {name:'Leather Armor',   slot:'body',       stat_effects:{Stamina:2}},
+                   {name:'Shield',          slot:'accessory1', stat_effects:{Stamina:1}}],
+    'Valkyrie':   [{name:'Iron Sword',      slot:'weapon',     stat_effects:{Strength:2}},
+                   {name:'Leather Armor',   slot:'body',       stat_effects:{Stamina:2}},
+                   {name:'Shield',          slot:'accessory1', stat_effects:{Stamina:1}}],
+    'Elf Archer': [{name:'Shortbow',        slot:'weapon',     stat_effects:{Agility:2}},
+                   {name:'Traveling Cloak', slot:'body',       stat_effects:{Agility:1}},
+                   {name:'Quiver of Arrows',slot:'accessory1', stat_effects:{Luck:1}}],
+    'Wizard':     [{name:'Oak Staff',       slot:'weapon',     stat_effects:{Magic:2}},
+                   {name:'Apprentice Robes',slot:'body',       stat_effects:{Magic:1}},
+                   {name:'Spell Tome',      slot:'accessory2', stat_effects:{Magic:1}}],
+    'Thief':      [{name:'Dagger',          slot:'weapon',     stat_effects:{Agility:2}},
+                   {name:'Dark Cloak',      slot:'body',       stat_effects:{Agility:1}},
+                   {name:'Lockpick Set',    slot:'accessory1', stat_effects:{Charisma:1}}],
+  },
+  scifi: {
+    'AI':           [{name:'Neural Interface', slot:'head',       stat_effects:{Intelligence:2}},
+                     {name:'Data Gloves',      slot:'hands',      stat_effects:{'Tech Skill':1}},
+                     {name:'Power Cell',       slot:'accessory1', stat_effects:{Endurance:1}}],
+    'Aliens':       [{name:'Alien Blade',      slot:'weapon',     stat_effects:{Intelligence:2}},
+                     {name:'Enviro-Suit',      slot:'body',       stat_effects:{Endurance:2}},
+                     {name:'Translator Device',slot:'accessory2', stat_effects:{Charisma:2}}],
+    'Space Travel': [{name:'Plasma Pistol',    slot:'weapon',     stat_effects:{'Tech Skill':2}},
+                     {name:'Flight Suit',      slot:'body',       stat_effects:{Endurance:2}},
+                     {name:'Nav Computer',     slot:'accessory1', stat_effects:{Intelligence:2}}],
+    'Time Travel':  [{name:'Temporal Device',  slot:'accessory1', stat_effects:{Intelligence:2}},
+                     {name:'Reinforced Jacket',slot:'body',       stat_effects:{Endurance:1}},
+                     {name:'Comm Unit',        slot:'accessory2', stat_effects:{'Tech Skill':1}}],
+  },
+  action: {
+    'Egyptian Pharaoh Era': [{name:'Khopesh',          slot:'weapon',     stat_effects:{Strength:2}},
+                              {name:'Linen Wrap',        slot:'body',       stat_effects:{Stamina:1}},
+                              {name:'Ankh Amulet',       slot:'accessory2', stat_effects:{Luck:1}}],
+    'Roman Empire':          [{name:'Gladius',           slot:'weapon',     stat_effects:{Strength:2}},
+                              {name:'Lorica Segmentata', slot:'body',       stat_effects:{Stamina:2}},
+                              {name:'Pugio Dagger',      slot:'accessory1', stat_effects:{Agility:1}}],
+    'Renaissance':           [{name:'Rapier',            slot:'weapon',     stat_effects:{Agility:2}},
+                              {name:'Doublet',           slot:'body',       stat_effects:{Charisma:1}},
+                              {name:'Compass',           slot:'accessory1', stat_effects:{Cunning:1}}],
+    'American Wild West':    [{name:'Revolver',          slot:'weapon',     stat_effects:{Cunning:2}},
+                              {name:'Duster Coat',       slot:'body',       stat_effects:{Stamina:1}},
+                              {name:'Sheriff Badge',     slot:'accessory1', stat_effects:{Charisma:1}}],
+    'World War II':          [{name:'Service Rifle',     slot:'weapon',     stat_effects:{Strength:2}},
+                              {name:'Field Jacket',      slot:'body',       stat_effects:{Stamina:2}},
+                              {name:'Dog Tags',          slot:'accessory1', stat_effects:{Luck:1}}],
+  },
+  comedy: {
+    'Workplace Comedy': [{name:'Thermos of Coffee',       slot:'accessory1', stat_effects:{Wit:1}},
+                         {name:'Work Bag',                slot:'accessory2', stat_effects:{Charm:1}},
+                         {name:'Name Badge',              slot:'head',       stat_effects:{Charisma:1}}],
+    'Small Town Chaos': [{name:'Bicycle',                 slot:'accessory1', stat_effects:{Luck:1}},
+                         {name:'Gossip Journal',          slot:'accessory2', stat_effects:{Wit:1}},
+                         {name:'Sun Hat',                 slot:'head',       stat_effects:{Charisma:1}}],
+    'Royally Confused': [{name:'Fancy Hat',               slot:'head',       stat_effects:{Charisma:2}},
+                         {name:'Borrowed Formal Wear',    slot:'body',       stat_effects:{Charm:1}},
+                         {name:'Monogrammed Handkerchief',slot:'accessory1', stat_effects:{Wit:1}}],
+    'Superhero Farce':  [{name:'Cape',                    slot:'body',       stat_effects:{Charisma:1}},
+                         {name:'Mask',                    slot:'head',       stat_effects:{Luck:1}},
+                         {name:'Utility Belt',            slot:'accessory1', stat_effects:{Wit:1}}],
+  },
+};
+
 // ── State ─────────────────────────────────────────────────────
 var _genre = null, _rolledStats = null, _character = null;
 var _history = [], _gameStarted = false, _currentSaveId = null, _turnCount = 0;
@@ -191,6 +259,16 @@ function effStatValue(statObj) {
   ));
 }
 
+function conditionMultiplier(item) {
+  if (!item) return 1;
+  var status = item.status || (item.equipped ? 'equipped' : 'bag');
+  var cond = (item.condition !== undefined) ? item.condition : 100;
+  if (status === 'broken' || cond === 0) return 0;
+  if (cond < 25) return 0.25;
+  if (cond < 50) return 0.5;
+  return 1.0;
+}
+
 function migrateStats(stats) {
   if (!stats) return {};
   var out = {};
@@ -214,9 +292,12 @@ function recalcItemBonuses() {
   Object.keys(_inventory.equipped || {}).forEach(function(slot) {
     var item = _inventory.equipped[slot];
     if (!item) return;
+    var mult = conditionMultiplier(item);
     Object.keys(item.stat_effects || {}).forEach(function(n) {
       var s = _character.stats[n];
-      if (s && typeof s === 'object') s.item_bonus = (s.item_bonus || 0) + item.stat_effects[n];
+      if (s && typeof s === 'object') {
+        s.item_bonus = (s.item_bonus || 0) + Math.floor(item.stat_effects[n] * mult);
+      }
     });
     if (item.cursed && item.cursed_revealed) {
       Object.keys(item.curse_effects || {}).forEach(function(n) {
@@ -371,6 +452,7 @@ async function startGame() {
     document.getElementById('submit-btn').disabled = false;
     document.getElementById('qs-btn').disabled = false;
     document.getElementById('prompt').focus();
+    await equipStartingInventory();
   } catch(err) {
     appendMsg('error', 'Failed to start: ' + err.message);
   }
@@ -437,8 +519,19 @@ function buildInventoryContext() {
   var eqLines = SLOTS.map(function(slot) {
     var item = equipped[slot];
     if (!item) return null;
-    var fx = formatStatEffects(item.stat_effects);
-    return '  ' + (slotNames[slot] || slot) + ': ' + item.name + (fx ? ' [' + fx + ']' : '');
+    var status = item.status || (item.equipped ? 'equipped' : 'bag');
+    var cond = item.condition !== undefined ? item.condition : 100;
+    var mult = conditionMultiplier(item);
+    var adjFx = {};
+    Object.keys(item.stat_effects || {}).forEach(function(k) { adjFx[k] = Math.floor(item.stat_effects[k] * mult); });
+    var fx = formatStatEffects(adjFx);
+    var condNote = status === 'broken' ? ' [BROKEN]'
+                 : status === 'missing' ? ' [MISSING]'
+                 : cond < 25 ? ' [critical:' + cond + '%]'
+                 : cond < 50 ? ' [damaged:' + cond + '%]'
+                 : cond < 75 ? ' [worn:' + cond + '%]'
+                 : '';
+    return '  ' + (slotNames[slot] || slot) + ': ' + item.name + condNote + (fx ? ' [' + fx + ']' : '');
   }).filter(Boolean);
   if (eqLines.length) { lines.push('\nEquipped:'); eqLines.forEach(function(l) { lines.push(l); }); }
 
@@ -512,15 +605,41 @@ function renderCharSheet() {
   SLOTS.forEach(function(slot) {
     var item = equipped[slot];
     var lbl = escHtml(slotNames[slot] || slot);
-    html += '<div class="cs-equipped-slot"><span class="cs-slot-lbl">' + lbl + '</span>';
+    var status = item ? (item.status || (item.equipped ? 'equipped' : 'bag')) : null;
+    var cond = item ? (item.condition !== undefined ? item.condition : 100) : 100;
+    html += '<div class="cs-equipped-slot-wrap"><div class="cs-equipped-slot"><span class="cs-slot-lbl">' + lbl + '</span>';
     if (item) {
-      var rc = rarityClass(item);
-      var fx = formatStatEffects(item.stat_effects);
-      html += '<span class="' + rc + '" style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + escHtml(item.name) + '</span>'
-        + (fx ? '<span class="cs-item-fx">[' + escHtml(fx) + ']</span>' : '')
-        + '<button class="btn-inv" data-unequip="' + escHtml(slot) + '">⬆</button>';
+      if (status === 'missing') {
+        html += '<span style="color:#e05252;flex:1;font-size:.65rem;font-style:italic">⚠️ ' + escHtml(item.name) + ' — Missing</span>';
+      } else if (status === 'broken' || cond === 0) {
+        html += '<span style="color:#e05252;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">🔴 ' + escHtml(item.name) + '</span>'
+          + '<span class="cs-item-fx" style="color:#e05252">[broken]</span>'
+          + '<button class="btn-inv" data-unequip="' + escHtml(slot) + '">⬆</button>';
+      } else {
+        var rc = rarityClass(item);
+        var mult = conditionMultiplier(item);
+        var adjFx = {};
+        Object.keys(item.stat_effects || {}).forEach(function(k) { adjFx[k] = Math.floor(item.stat_effects[k] * mult); });
+        var fx = formatStatEffects(adjFx);
+        var condIcon = cond < 25 ? ' <span style="color:#e05252;font-size:.6rem">🔴</span>'
+                     : cond < 50 ? ' <span style="color:#e0863a;font-size:.6rem">⚠</span>'
+                     : cond < 75 ? ' <span style="color:#d4a017;font-size:.6rem">⚠</span>'
+                     : '';
+        html += '<span class="' + rc + '" style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + escHtml(item.name) + condIcon + '</span>'
+          + (fx ? '<span class="cs-item-fx">[' + escHtml(fx) + ']</span>' : '')
+          + '<button class="btn-inv" data-unequip="' + escHtml(slot) + '">⬆</button>';
+      }
     } else {
       html += '<span style="color:#3d4d5e;font-style:italic;font-size:.65rem;flex:1">— empty —</span>';
+    }
+    html += '</div>';
+    // Condition bar (only when item is present, not broken, and condition < 100)
+    if (item && status !== 'broken' && status !== 'missing' && cond < 100) {
+      var barColor = cond >= 75 ? '#d4a017' : cond >= 50 ? '#e0863a' : cond >= 25 ? '#e05252' : '#8b0000';
+      html += '<div class="cond-bar-row">'
+        + '<div class="cond-bar-track"><div class="cond-bar-fill" style="width:' + cond + '%;background:' + barColor + '"></div></div>'
+        + '<span class="cond-pct">' + cond + '%</span>'
+        + '</div>';
     }
     html += '</div>';
   });
@@ -944,6 +1063,23 @@ function handleCombatResult(d, attackType) {
                   power_malfunction:'⚡ Power Malfunction'};
     lines.push('💥 Special: **' + (sNames[d.special_name] || d.special_name) + '**');
   }
+  // Apply item condition updates from server
+  if (d.item_conditions && _inventory && _inventory.equipped) {
+    d.item_conditions.forEach(function(ic) {
+      var item = _inventory.equipped[ic.slot];
+      if (item && item.id === ic.id) {
+        item.condition = ic.condition;
+        item.status = ic.status;
+        if (ic.status === 'broken') {
+          lines.push('🔴 **' + escHtml(item.name) + '** has broken!');
+        } else if (ic.condition < 25) {
+          lines.push('⚠️ **' + escHtml(item.name) + '** is critically damaged (' + ic.condition + '%).');
+        }
+      }
+    });
+    recalcItemBonuses();
+    renderCharSheet();
+  }
   appendSystemMsg(lines.join('\n'));
   updateHealthBar();
   if (d.enemy_defeated) {
@@ -1003,6 +1139,78 @@ function showGameOver(d) {
   div.querySelector('#go-new').addEventListener('click', function() { resetGame(); });
 }
 
+// ── Item state helpers ────────────────────────────────────────
+async function updateItemStatus(itemId, newStatus) {
+  if (!_currentSaveId || !itemId) return;
+  try {
+    await fetch('/api/game/saves/' + _currentSaveId + '/inventory/status', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({item_id: itemId, status: newStatus})
+    });
+    // Remove lost items from local state
+    if (newStatus === 'lost') {
+      if (_inventory && _inventory.equipped) {
+        Object.keys(_inventory.equipped).forEach(function(slot) {
+          var item = _inventory.equipped[slot];
+          if (item && item.id === itemId) { _inventory.equipped[slot] = null; }
+        });
+      }
+      if (_inventory && _inventory.bag) {
+        _inventory.bag = _inventory.bag.filter(function(i) { return i.id !== itemId; });
+      }
+    }
+    recalcItemBonuses();
+    renderCharSheet();
+  } catch(e) {}
+}
+
+function detectItemNarrativeLoss(text) {
+  if (!_inventory) return;
+  var sentences = text.split(/[.!?]+/);
+  var equipped = _inventory.equipped || {};
+  var bag = _inventory.bag || [];
+  var allItems = Object.values(equipped).filter(Boolean).concat(bag);
+  allItems.forEach(function(item) {
+    if (!item || !item.name) return;
+    var nameLower = item.name.toLowerCase();
+    var lost = false, broken = false;
+    sentences.forEach(function(sent) {
+      var sl = sent.toLowerCase();
+      if (sl.indexOf(nameLower) < 0) return;
+      if (!lost) ITEM_LOSS_WORDS.forEach(function(w) { if (sl.indexOf(w) >= 0) lost = true; });
+      if (!broken) ITEM_BREAK_WORDS.forEach(function(w) { if (sl.indexOf(w) >= 0) broken = true; });
+    });
+    if (lost) { updateItemStatus(item.id, 'lost'); }
+    else if (broken && (item.condition === undefined || item.condition > 0)) { updateItemStatus(item.id, 'broken'); }
+  });
+}
+
+async function equipStartingInventory() {
+  if (!_character) return;
+  var genre = _character.genre || 'fantasy';
+  var subtype = _character.subtype || '';
+  var genreItems = STARTING_ITEMS[genre] || {};
+  var items = genreItems[subtype] || [];
+  if (!items.length) return;
+  // Need a save ID to persist — create one via quickSave if not yet saved
+  if (!_currentSaveId) { await quickSave(); }
+  if (!_currentSaveId) return;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/inventory/equip-starting', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({items: items})
+    });
+    var d = await r.json();
+    if (d.equipped) {
+      _inventory.equipped = d.equipped;
+      recalcItemBonuses();
+      renderCharSheet();
+    }
+  } catch(e) {}
+}
+
 // ── Chat ──────────────────────────────────────────────────────
 async function sendTurn(e) {
   if (e && e.preventDefault) e.preventDefault();
@@ -1028,6 +1236,7 @@ async function sendTurn(e) {
     detectCombatStart(resp);
     detectLootDrop(resp);
     handleSkillTracking(resp);
+    detectItemNarrativeLoss(resp);
   } catch(err) {
     _history.pop();
     appendMsg('error', 'Request failed: ' + err.message);

@@ -51,7 +51,7 @@ def get_nodes() -> dict:
         _peers_last_fetch = now
         return dict(nodes)
 
-def _get_daemon_version(fallback: str = "v0.12.36") -> str:
+def _get_daemon_version(fallback: str = "v0.12.37") -> str:
     try:
         r = requests.get(f"{LOCAL_URL}/status", timeout=2, verify=False)
         v = r.json().get("version", "")
@@ -677,7 +677,12 @@ UNIVERSAL GAME RULES (follow strictly on every turn):
 - Examples of natural stat references:
   "Your Strength of 14 lets you force the door open easily."
   "Your low Agility of 6 means the guard spots you before you can hide."
-  "With Charisma at 18, the merchant offers you a better price."\
+  "With Charisma at 18, the merchant offers you a better price."
+- Reference item condition naturally in narrative:
+  "Your worn sword chips against the armor" / "The cloak tears as you squeeze through the gap"
+- If an item is clearly lost, stolen, traded, or destroyed: state it explicitly so the system can update inventory
+- If an item is badly damaged or broken: state it explicitly
+- If a repair NPC (blacksmith, mechanic, tailor, armorer) is available: offer to restore broken items to full condition\
 """
 
 _PRE_CONTEXT_2 = {
@@ -844,7 +849,12 @@ details[open]>summary::before{transform:rotate(90deg)}
 /* ── Inventory / Level / Skills ── */
 .cs-section{padding-top:6px;margin-top:6px;border-top:1px solid #21262d}
 .cs-section-hdr{font-size:.67rem;color:#8892a4;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+.cs-equipped-slot-wrap{margin-bottom:1px}
 .cs-equipped-slot{display:flex;align-items:center;gap:5px;padding:2px 0;font-size:.71rem}
+.cond-bar-row{display:flex;align-items:center;gap:4px;padding:0 0 3px 0}
+.cond-bar-track{flex:1;height:3px;background:#161b22;border-radius:2px;overflow:hidden;margin-left:94px}
+.cond-bar-fill{height:100%;transition:width .3s}
+.cond-pct{font-size:.58rem;color:#5a6a7e;white-space:nowrap;min-width:24px;text-align:right}
 .cs-slot-lbl{width:88px;color:#8892a4;flex-shrink:0;font-size:.66rem}
 .cs-item-fx{color:#8892a4;font-size:.64rem;margin-left:3px;white-space:nowrap;flex-shrink:0}
 .cs-bag-row{display:flex;align-items:center;gap:5px;padding:2px 0;font-size:.71rem}
@@ -1328,6 +1338,8 @@ def _generate_item(genre: str, slot: str, rarity_override: str = None) -> dict:
         'equipped': False,
         'cursed': rarity == 'cursed',
         'cursed_revealed': False,
+        'status': 'bag',
+        'condition': 100,
         'description': descs.get(rarity, descs['common']),
     }
 
@@ -1469,6 +1481,16 @@ def _generate_enemy(genre: str, level: int, enemy_name: str = None) -> dict:
         'loot_tier': 'legendary' if is_boss else ('rare' if level >= 4 else ('uncommon' if level >= 2 else 'common')),
         'defeated': False,
     }
+
+
+def _apply_item_condition(item: dict, change: int) -> dict:
+    if not item or item.get('status') == 'broken':
+        return item
+    new_cond = max(0, item.get('condition', 100) + change)
+    item['condition'] = new_cond
+    if new_cond == 0:
+        item['status'] = 'broken'
+    return item
 
 
 def _eff_stat(stats: dict, equipped: dict, stat_name: str) -> int:
@@ -1685,6 +1707,123 @@ def api_inventory_add(save_id):
     return jsonify({"ok": True, "bag": bag})
 
 
+@app.route("/api/game/saves/<save_id>/inventory/equip-starting", methods=["POST"])
+def api_equip_starting(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    items = body.get("items", [])
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    equipped = s.get("equipped", {})
+    for item_data in items:
+        slot = item_data.get("slot")
+        if not slot:
+            continue
+        equipped[slot] = {
+            "id": str(_uuid.uuid4())[:8],
+            "name": item_data.get("name", "Item"),
+            "slot": slot,
+            "rarity": "common",
+            "stat_effects": item_data.get("stat_effects", {}),
+            "curse_effects": {},
+            "equipped": True,
+            "cursed": False,
+            "cursed_revealed": False,
+            "status": "equipped",
+            "condition": 100,
+            "description": "Starting equipment.",
+        }
+    s["equipped"] = equipped
+    _write_save_record(save_id, uid, s)
+    return jsonify({"ok": True, "equipped": equipped})
+
+
+@app.route("/api/game/saves/<save_id>/inventory/condition", methods=["POST"])
+def api_inventory_condition(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    item_id = body.get("item_id")
+    change = int(body.get("condition_change", 0))
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    for slot, item in s.get("equipped", {}).items():
+        if item and item.get("id") == item_id:
+            item = _apply_item_condition(item, change)
+            s["equipped"][slot] = item
+            _write_save_record(save_id, uid, s)
+            return jsonify({"ok": True, "condition": item["condition"], "status": item.get("status")})
+    for item in s.get("bag", []):
+        if item and item.get("id") == item_id:
+            item = _apply_item_condition(item, change)
+            _write_save_record(save_id, uid, s)
+            return jsonify({"ok": True, "condition": item["condition"], "status": item.get("status")})
+    return jsonify({"error": "item not found"}), 404
+
+
+@app.route("/api/game/saves/<save_id>/inventory/status", methods=["POST"])
+def api_inventory_status(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    item_id = body.get("item_id")
+    new_status = body.get("status")
+    if new_status not in ("equipped", "bag", "broken", "lost", "missing"):
+        return jsonify({"error": "invalid status"}), 400
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    equipped = s.get("equipped", {})
+    bag = s.get("bag", [])
+    for slot, item in list(equipped.items()):
+        if item and item.get("id") == item_id:
+            if new_status == "lost":
+                del equipped[slot]
+            else:
+                item["status"] = new_status
+                if new_status == "broken":
+                    item["condition"] = 0
+                equipped[slot] = item
+            s["equipped"] = equipped
+            _write_save_record(save_id, uid, s)
+            return jsonify({"ok": True})
+    for item in bag:
+        if item and item.get("id") == item_id:
+            if new_status == "lost":
+                s["bag"] = [i for i in bag if i.get("id") != item_id]
+            else:
+                item["status"] = new_status
+                if new_status == "broken":
+                    item["condition"] = 0
+            _write_save_record(save_id, uid, s)
+            return jsonify({"ok": True})
+    return jsonify({"error": "item not found"}), 404
+
+
+@app.route("/api/game/saves/<save_id>/inventory/repair", methods=["POST"])
+def api_inventory_repair(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    item_id = body.get("item_id")
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    for slot, item in s.get("equipped", {}).items():
+        if item and item.get("id") == item_id:
+            item["condition"] = 100
+            item["status"] = "equipped"
+            s["equipped"][slot] = item
+            _write_save_record(save_id, uid, s)
+            return jsonify({"ok": True, "condition": 100})
+    for item in s.get("bag", []):
+        if item and item.get("id") == item_id:
+            item["condition"] = 100
+            item["status"] = "bag"
+            _write_save_record(save_id, uid, s)
+            return jsonify({"ok": True, "condition": 100})
+    return jsonify({"error": "item not found"}), 404
+
+
 @app.route("/api/game/saves/<save_id>/combat/start", methods=["POST"])
 def api_combat_start(save_id):
     uid = _user_id(_get_current_user())
@@ -1788,6 +1927,28 @@ def api_combat_attack(save_id):
             result["player_dead"] = True
             s["in_combat"] = False
     s["enemy_state"] = enemy
+    # Item condition degradation
+    item_conditions = []
+    weapon = equipped.get('weapon')
+    body_armor = equipped.get('body')
+    is_special = result.get('special_triggered', False)
+    special_name = result.get('special_name')
+    # Weapon wears on every attack
+    if weapon and weapon.get('id'):
+        change = -10 if (is_special and special_name == 'fire_breath') else -5
+        weapon = _apply_item_condition(weapon, change)
+        equipped['weapon'] = weapon
+        item_conditions.append({'slot': 'weapon', 'id': weapon['id'],
+                                 'condition': weapon['condition'], 'status': weapon.get('status', 'equipped')})
+    # Body armor wears when player takes damage
+    if body_armor and body_armor.get('id') and result.get('enemy_damage', 0) > 0:
+        change = -10 if (is_special and special_name in ('fire_breath', 'call_reinforcements')) else -3
+        body_armor = _apply_item_condition(body_armor, change)
+        equipped['body'] = body_armor
+        item_conditions.append({'slot': 'body', 'id': body_armor['id'],
+                                 'condition': body_armor['condition'], 'status': body_armor.get('status', 'equipped')})
+    s['equipped'] = equipped
+    result['item_conditions'] = item_conditions
     _write_save_record(save_id, uid, s)
     return jsonify(result)
 
