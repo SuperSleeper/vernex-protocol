@@ -4,7 +4,7 @@
 June 8, 2026 (End of Session)
 
 ## Current Version
-v0.12.46
+v0.12.47
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -13,6 +13,13 @@ v0.12.46
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-08)
+
+### v0.12.47 — NPC common word filter + effective stats in LLM context (dashboard)
+✅ **`COMMON_WORDS` Set added to game.js**: 73-word set covering pronouns (He/She/They/Him/Her...), articles (The/An/A), conjunctions (And/But/Or...), prepositions (In/On/At/By/To...), auxiliary verbs (Was/Is/Are/Were/Has/Had/Did/Does/Can/May/Might/Must/Shall/Will/Would/Could/Should/Have/Been/Being/Be), common adverbs (Now/Then/Here/There/Just/Even/Still/Also/Too/Very/More/Most/Less/Least/Once/Twice)
+✅ **`extractNpcNamesFromText()` updated**: two new guards added before existing suffix checks — `if (n.length < 3) return false` (belt-and-suspenders below regex minimum) and `if (COMMON_WORDS.has(n)) return false` (eliminates false positives like "She", "The", "Was", "For", "Which" that pass all suffix filters)
+✅ **`_build_persistent_context()` updated**: now extracts the "Effective Stats:" block from the inventory context system message and emits a compact `EFFECTIVE STATS: STR:9  STA:16  CHA:16  CUN:14  AGI:8  LCK:5` line in the persistent context block, between Health and EFFECTIVE CHARISMA — full stat picture visible to LLM every turn
+✅ **`_stat_abbrev` dict added** in `_build_persistent_context`: maps all 14 stat names to 3-letter codes (matches `STAT_ABBREV` in game.js); falls back to first 3 chars uppercased for unknown stats
+✅ **Verified**: `buildInventoryContext()` in game.js already uses `eff[s]` (from `computeEffectiveStats()`) for the "Effective Stats:" block and `eff[chaKey]` for the EFFECTIVE CHARISMA line — both already correct, no change needed client-side
 
 ### v0.12.46 — PG-13 romance system + jealousy subplot + stat bonuses (dashboard)
 ✅ **`_make_npc()` updated**: adds `romance_state` (neutral/interested/flirting/devoted/heartbroken), `romance_interactions`, `romance_ignored_turns`, `jealousy_target` to every new NPC

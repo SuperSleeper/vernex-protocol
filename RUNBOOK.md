@@ -353,6 +353,7 @@ curl -fsSL "http://172.17.0.132:5001/install?token=<token-id>" | bash
 | v0.12.44 | Persistent NPC context injected every turn as final system msg; history windowed to last 10 turns |
 | v0.12.45 | Adaptive IQ tier matching, plot momentum stagnation breaking, NPC argument hard cap |
 | v0.12.46 | PG-13 romance system: 5 states, jealousy subplot, Charisma-gated progression, stat bonuses, team dynamics effects, opt-in toggle |
+| v0.12.47 | NPC false-positive fix: COMMON_WORDS set (73 words) in extractNpcNamesFromText; effective stats compact line in persistent context block |
 
 ---
 

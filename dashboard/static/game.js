@@ -121,6 +121,8 @@ var ROMANCE_DEVOTION_WORDS = ['love you','in love with','always be by','would di
 var ROMANCE_GIFT_WORDS = ['give you','offer you','this is for you','for you alone','made this for','found this for'];
 var ROMANCE_ICONS = {neutral:'', interested:'💛', flirting:'🩷', devoted:'❤️', heartbroken:'💔'};
 
+var COMMON_WORDS = new Set(['He','She','It','We','They','You','Him','Her','His','Its','Our','My','Your','Their','Them','These','Those','This','That','Who','What','Which','The','An','A','And','But','Or','Nor','Yet','So','For','In','On','At','By','To','Of','Up','As','If','Was','Is','Are','Were','Has','Had','Did','Does','Can','May','Might','Must','Shall','Will','Would','Could','Should','Have','Been','Being','Be','Now','Then','Here','There','When','Where','How','Why','Just','Even','Still','Also','Too','Very','More','Most','Less','Least','Once','Twice']);
+
 var STARTING_ITEMS = {
   fantasy: {
     'Warrior':    [{name:'Iron Sword',      slot:'weapon',     stat_effects:{Strength:2}},
@@ -1552,11 +1554,13 @@ function extractNpcNamesFromText(text) {
   while ((m = pat1.exec(text)) !== null) names.push(m[1]);
   while ((m = pat2.exec(text)) !== null) names.push(m[1]);
   while ((m = pat3.exec(text)) !== null) names.push(m[1]);
-  // Deduplicate and filter exclusions; minimum 3 chars enforced by regex already
+  // Deduplicate and filter exclusions
   var seen = {};
   return names.filter(function(n) {
     if (seen[n]) return false;
     seen[n] = true;
+    if (n.length < 3) return false;          // too short to be a name
+    if (COMMON_WORDS.has(n)) return false;   // pronoun, article, conjunction, preposition, aux verb, common adverb
     // Reject words that are grammatically never names
     if (/ly$/i.test(n)) return false;        // adverbs: Slowly, Quickly, Never
     if (/ing$/i.test(n)) return false;       // gerunds: Running, Fighting

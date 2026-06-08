@@ -51,7 +51,7 @@ def get_nodes() -> dict:
         _peers_last_fetch = now
         return dict(nodes)
 
-def _get_daemon_version(fallback: str = "v0.12.46") -> str:
+def _get_daemon_version(fallback: str = "v0.12.47") -> str:
     try:
         r = requests.get(f"{LOCAL_URL}/status", timeout=2, verify=False)
         v = r.json().get("version", "")
@@ -1259,6 +1259,31 @@ def _build_persistent_context(messages: list) -> str:
     health_line = next((l.strip() for l in inv_lines if l.strip().startswith("Health:")), "")
     cha_line    = next((l.strip() for l in inv_lines if "EFFECTIVE CHARISMA:" in l), "")
 
+    # Extract compact effective stats from the "Effective Stats:" block
+    _stat_abbrev = {
+        "Strength": "STR", "Stamina": "STA", "Charisma": "CHA", "Magic": "MAG",
+        "Agility": "AGI", "Luck": "LCK", "Intelligence": "INT", "Tech Skill": "TEC",
+        "Endurance": "END", "Cunning": "CUN", "Wit": "WIT", "Clumsiness": "CLU",
+        "Charm": "CHR", "Stubbornness": "STU",
+    }
+    eff_stat_parts: list[str] = []
+    _in_eff = False
+    for line in inv_lines:
+        s = line.strip()
+        if s == "Effective Stats:":
+            _in_eff = True
+            continue
+        if _in_eff:
+            m = re.match(r"^([A-Za-z ]+?):\s*(\d+)", s)
+            if m and not s.startswith("EFFECTIVE") and not s.startswith("Health") and not s.startswith("Level"):
+                name = m.group(1).strip()
+                val = m.group(2)
+                abbr = _stat_abbrev.get(name, name[:3].upper())
+                eff_stat_parts.append(f"{abbr}:{val}")
+            elif s:
+                _in_eff = False
+    eff_stats_line = ("EFFECTIVE STATS: " + "  ".join(eff_stat_parts)) if eff_stat_parts else ""
+
     # Extract NPC entries (friendly and above)
     npc_entries: list[str] = []
     in_npc = False
@@ -1309,6 +1334,8 @@ def _build_persistent_context(messages: list) -> str:
         parts.append(level_line)
     if health_line:
         parts.append(health_line)
+    if eff_stats_line:
+        parts.append(eff_stats_line)
     if cha_line:
         parts.append(cha_line)
 
