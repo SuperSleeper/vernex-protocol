@@ -102,24 +102,6 @@ var NPC_BETRAY_WORDS = ['betrayed by player','attacked by player','abandoned by 
 var NPC_GIFT_WORDS = ['gives','offers','hands over','presents','bestows'];
 var NPC_JOIN_WORDS = ['joins the party','joins your party','joins you','agrees to travel','follows you','pledges to help'];
 // Words whose capitalized form we never treat as an NPC name
-var NPC_NAME_EXCLUSIONS = {
-  'The':1,'A':1,'An':1,'You':1,'Your':1,'I':1,'It':1,'He':1,'She':1,'They':1,'We':1,'Our':1,'His':1,'Her':1,
-  'HP':1,'LVL':1,'Level':1,'Class':1,'Status':1,'Player':1,'Enemy':1,'Combat':1,'Attack':1,'Defense':1,
-  'Magic':1,'Skill':1,'Item':1,'Bag':1,'Quest':1,'Game':1,'Turn':1,'Round':1,'Party':1,'Crew':1,'Squad':1,
-  'North':1,'South':1,'East':1,'West':1,'Left':1,'Right':1,'Up':1,'Down':1,'Inside':1,'Outside':1,
-  'Village':1,'Town':1,'City':1,'Forest':1,'Cave':1,'Castle':1,'Tavern':1,'Inn':1,'Market':1,'Temple':1,
-  'Street':1,'Road':1,'Bridge':1,'Gate':1,'Tower':1,'Hall':1,'Shop':1,'Field':1,'River':1,'Mountain':1,
-  'Lord':1,'Lady':1,'King':1,'Queen':1,'Guard':1,'Knight':1,'Merchant':1,'Wizard':1,'Warrior':1,
-  'Captain':1,'General':1,'Master':1,'Elder':1,'Chief':1,'Leader':1,
-  // Additional false-positive suppressions
-  'Lead':1,'Voice':1,'Sound':1,'Figure':1,'Shadow':1,'Shape':1,'Farmer':1,'Soldier':1,
-  'Head':1,'Hand':1,'Face':1,'Eye':1,'Back':1,'Side':1,'Top':1,'High':1,'Low':1,
-  'Old':1,'New':1,'Last':1,'First':1,'Next':1,'Chest':1,'Foot':1,'Day':1,'Night':1,
-  'Way':1,'Time':1,'Man':1,'Woman':1,'Boy':1,'Girl':1,'Dark':1,'Light':1,'Red':1,'Black':1,
-  'White':1,'Gold':1,'Silver':1,'Iron':1,'Stone':1,'Wood':1,'Blood':1,'Fire':1,'Water':1,
-  'Air':1,'Earth':1,'Death':1,'Life':1,'War':1,'Peace':1,'Luck':1,'Fate':1,'Honor':1,
-  'Your':1,'With':1,'From':1,'Into':1,'Upon':1,'After':1,'Before':1,'Through':1,'Around':1
-};
 
 var NPC_RECRUIT_KEYWORDS = ['join me','come with me','join my party','join my crew','join my team','travel with me','fight with me'];
 var NPC_TALKDOWN_KEYWORDS = ['stand down','talk down','reason with','make peace','settle this'];
@@ -1536,8 +1518,23 @@ function extractNpcNamesFromText(text) {
   // Deduplicate and filter exclusions; minimum 3 chars enforced by regex already
   var seen = {};
   return names.filter(function(n) {
-    if (NPC_NAME_EXCLUSIONS[n] || seen[n]) return false;
+    if (seen[n]) return false;
     seen[n] = true;
+    // Reject words that are grammatically never names
+    if (/ly$/i.test(n)) return false;        // adverbs: Slowly, Quickly, Never
+    if (/ing$/i.test(n)) return false;       // gerunds: Running, Fighting
+    if (/ed$/i.test(n)) return false;        // past tense: Halted, Turned
+    if (/tion$/i.test(n)) return false;      // nouns: Caution, Attention
+    if (/ness$/i.test(n)) return false;      // nouns: Darkness, Stillness
+    if (/ment$/i.test(n)) return false;      // nouns: Movement, Agreement
+    if (/ous$/i.test(n)) return false;       // adjectives: Dangerous, Famous
+    if (/ful$/i.test(n)) return false;       // adjectives: Careful, Powerful
+    if (/less$/i.test(n)) return false;      // adjectives: Fearless, Hopeless
+    if (/ive$/i.test(n)) return false;       // adjectives: Massive, Instinctive
+    if (/ble$/i.test(n)) return false;       // adjectives: Possible, Terrible
+    if (/ical$/i.test(n)) return false;      // adjectives: Magical, Physical
+    if (/ern$/i.test(n)) return false;       // directions: Northern, Eastern
+    if (/ward$/i.test(n)) return false;      // directions: Forward, Onward
     return true;
   });
 }
