@@ -23,7 +23,7 @@ Key architectural innovations:
 
 ---
 
-## 2. Current Implementation — v0.12.40
+## 2. Current Implementation — v0.12.41
 
 ### 2.1 Hardware Configuration
 

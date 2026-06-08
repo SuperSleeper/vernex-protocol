@@ -32,7 +32,7 @@ Vernex Protocol is a distributed home node compute network with a two-class toke
 | Core language | Go (node daemon) |
 | Dashboard language | Python + Flask |
 | Target hardware | Budget consumer hardware, Raspberry Pi capable |
-| Current version | v0.12.40 (dashboard) / v0.12.18 (daemon) |
+| Current version | v0.12.41 (dashboard) / v0.12.18 (daemon) |
 
 ---
 
@@ -348,6 +348,7 @@ curl -fsSL "http://172.17.0.132:5001/install?token=<token-id>" | bash
 | v0.12.38 | NPC relationship system (7 states), depth tracking, memory, narrative NPC detection |
 | v0.12.39 | NPC stat rolling (4d6 drop-lowest), recruitment check, talk-down mechanic, rival system |
 | v0.12.40 | Party formation + team dynamics (diversity/weakness/duplicate scoring), group combat power, 3 party routes, auto-add ally on recruit |
+| v0.12.41 | Server-side response length enforcement, narrative recruitment detection, empty-response retry UI |
 
 ---
 

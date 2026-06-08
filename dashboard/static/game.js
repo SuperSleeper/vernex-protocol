@@ -123,6 +123,8 @@ var NPC_NAME_EXCLUSIONS = {
 
 var NPC_RECRUIT_KEYWORDS = ['join me','come with me','join my party','join my crew','join my team','travel with me','fight with me'];
 var NPC_TALKDOWN_KEYWORDS = ['stand down','talk down','reason with','make peace','settle this'];
+var NARRATIVE_JOIN_KEYWORDS = ['joins you','joins your','will come with','agrees to follow','follow you','at your side','walk this path','your companion now','has joined'];
+var NARRATIVE_REJECT_KEYWORDS = ['refuses','declines','shakes his head','shakes her head','turns away','not joining',"won't come",'cannot come'];
 var STAT_ABBREV = {
   'Strength':'STR','Stamina':'STA','Charisma':'CHA','Magic':'MAG','Agility':'AGI','Luck':'LCK',
   'Intelligence':'INT','Tech Skill':'TEC','Endurance':'END','Cunning':'CUN',
@@ -1584,6 +1586,58 @@ async function detectNarrativeNPCs(text) {
   }
 }
 
+async function detectNarrativeRecruitment(text) {
+  if (!_gameStarted) return;
+  var paragraphs = text.split(/\n+/);
+  for (var i = 0; i < paragraphs.length; i++) {
+    var para = paragraphs[i];
+    var paraLower = para.toLowerCase();
+    var npc = Object.values(_npcs).find(function(n) {
+      return n.relationship !== 'ally' && paraLower.indexOf(n.name.toLowerCase()) >= 0;
+    });
+    if (!npc) continue;
+    var hasJoin = NARRATIVE_JOIN_KEYWORDS.some(function(k) { return paraLower.indexOf(k) >= 0; });
+    var hasReject = NARRATIVE_REJECT_KEYWORDS.some(function(k) { return paraLower.indexOf(k) >= 0; });
+    if (hasJoin && !hasReject) {
+      if (_party.members.indexOf(npc.id) < 0) {
+        npc.relationship = 'ally';
+        npc.memory = ((npc.memory || []).concat(['joined party (narrative)'])).slice(-5);
+        _npcs[npc.id] = npc;
+        appendSystemMsg('✅ **' + escHtml(npc.name) + '** has joined your party!');
+        await addToParty(npc.id);
+        if (_currentSaveId) {
+          try {
+            await fetch('/api/game/saves/' + _currentSaveId + '/npc/update', {
+              method: 'POST', headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({npc_id: npc.id, event: 'join_party',
+                memory_text: 'joined party (narrative)', location: extractCurrentLocation(text)})
+            });
+          } catch(e) {}
+        }
+      }
+      break;
+    } else if (hasReject && !hasJoin) {
+      npc.memory = ((npc.memory || []).concat(['declined to join'])).slice(-5);
+      _npcs[npc.id] = npc;
+    }
+  }
+}
+
+function showRetryButton(prompt, model) {
+  var log = document.getElementById('chat-log');
+  var div = document.createElement('div');
+  div.className = 'msg system';
+  div.innerHTML = '⚠️ No response — model may be overloaded. Try again or switch models.<br>'
+    + '<button class="btn-retry">🔄 Retry</button>';
+  div.querySelector('.btn-retry').addEventListener('click', function() {
+    div.remove();
+    document.getElementById('prompt').value = prompt;
+    sendTurn(null);
+  });
+  log.appendChild(div);
+  scrollToBottom();
+}
+
 // ── Chat ──────────────────────────────────────────────────────
 async function sendTurn(e) {
   if (e && e.preventDefault) e.preventDefault();
@@ -1610,7 +1664,8 @@ async function sendTurn(e) {
     detectLootDrop(resp);
     handleSkillTracking(resp);
     detectItemNarrativeLoss(resp);
-    detectNarrativeNPCs(resp);
+    await detectNarrativeNPCs(resp);
+    await detectNarrativeRecruitment(resp);
     // Recruitment / talk-down checks triggered by player prompt keywords
     if (detectRecruitmentIntent(prompt)) {
       var recruitTarget = findNpcInText(prompt);
@@ -1625,7 +1680,11 @@ async function sendTurn(e) {
     }
   } catch(err) {
     _history.pop();
-    appendMsg('error', 'Request failed: ' + err.message);
+    if (err.isEmpty) {
+      showRetryButton(prompt, model);
+    } else {
+      appendMsg('error', 'Request failed: ' + err.message);
+    }
   } finally {
     btn.disabled = false; btn.textContent = 'Send';
   }
@@ -1639,7 +1698,9 @@ async function gameFetch(msgs, model) {
   });
   var d = await r.json();
   if (d.error && !d.response) throw new Error(d.error);
-  return d.response || d.error || JSON.stringify(d);
+  var resp = d.response || '';
+  if (!resp.trim()) { var e = new Error('__empty__'); e.isEmpty = true; throw e; }
+  return resp;
 }
 
 function appendMsg(role, content) {

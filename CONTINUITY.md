@@ -4,7 +4,7 @@
 June 7, 2026 (End of Session)
 
 ## Current Version
-v0.12.40
+v0.12.41
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -13,6 +13,16 @@ v0.12.40
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-07)
+
+### v0.12.41 — Server-side length limit + narrative recruitment + empty response (dashboard)
+✅ **`_enforce_response_length(content)`**: splits by newline, removes blanks, identifies HUD line (starts with "["), keeps ≤3 content lines + HUD; finds last sentence boundary; appends "▶ [continue]"; skips structured blocks (``` or markdown tables); applied in `api_game_chat` after LLM response
+✅ **`NARRATIVE_JOIN_KEYWORDS` / `NARRATIVE_REJECT_KEYWORDS`**: constants for narrative-based recruitment/rejection detection
+✅ **`detectNarrativeRecruitment(text)`**: scans LLM response paragraphs; if known non-ally NPC name appears in paragraph with join keywords (no reject keywords) → marks ally, appends to party via `addToParty`, syncs to server via `/npc/update`; reject keywords record "declined to join" in NPC memory without changing relationship
+✅ **`detectNarrativeNPCs` now awaited** in `sendTurn` so NPCs are present before narrative recruitment fires
+✅ **`showRetryButton(prompt, model)`**: appends system msg + [🔄 Retry] button to chat log; on click, restores prompt and re-calls `sendTurn`
+✅ **`gameFetch` empty-response handling**: when response is blank, throws `{isEmpty:true}` error
+✅ **`sendTurn` catch updated**: `err.isEmpty` → `showRetryButton`; other errors → existing error message
+✅ **`.btn-retry` CSS** added to app.py template
 
 ### v0.12.40 — Party formation + team dynamics system (dashboard)
 ✅ **`_party` client state**: `{members[], capacity, team_dynamics_bonus, group_combat_power}` — init on startGame, reset on resetGame, included in save/load

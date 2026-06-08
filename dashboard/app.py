@@ -913,6 +913,8 @@ details[open]>summary::before{transform:rotate(90deg)}
 .cs-dynamics-bar{display:flex;height:4px;background:#161b22;border-radius:2px;overflow:hidden;margin-top:3px;margin-bottom:2px}
 .cs-dynamics-fill{height:100%;border-radius:2px;transition:width .3s}
 .msg.system{background:#1a1600;border:1px solid #3d2e00;align-self:stretch;font-size:.82rem;font-family:'Courier New',monospace;padding:8px 12px}
+.btn-retry{background:#1a3a1a;color:#3fb950;border:1px solid #238636;border-radius:4px;padding:5px 12px;font-size:.82rem;cursor:pointer;font-family:inherit;margin-top:6px;display:block}
+.btn-retry:hover{background:#238636;color:#fff}
 .msg.system p{margin:.3em 0}
 .lvl-choices{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
 .lvl-choices label{cursor:pointer;color:#e0e0e0;font-size:.8rem}
@@ -1136,6 +1138,39 @@ def api_gpu():
         return jsonify({"error": "unavailable"}), 503
 
 
+def _enforce_response_length(content: str) -> str:
+    """Truncate LLM response to ≤3 content lines + 1 HUD line. Preserves sentence boundaries."""
+    if not content or not content.strip():
+        return content
+    # Preserve responses that contain structured blocks
+    if "```" in content or ("\n|" in content and "|" in content):
+        return content
+    lines = content.split("\n")
+    non_blank = [l for l in lines if l.strip()]
+    if len(non_blank) <= 4:
+        return content
+    # Identify HUD line (last line starting with "[")
+    hud_idx = None
+    for i in range(len(non_blank) - 1, -1, -1):
+        if non_blank[i].strip().startswith("["):
+            hud_idx = i
+            break
+    hud_line = non_blank[hud_idx] if hud_idx is not None else None
+    content_lines = [l for i, l in enumerate(non_blank) if i != hud_idx]
+    # Already within limit when HUD accounted for
+    if len(content_lines) <= 3:
+        return content
+    # Join up to 3 content lines and find last complete sentence
+    excerpt = " ".join(content_lines[:3])
+    last_end = max(excerpt.rfind("."), excerpt.rfind("!"), excerpt.rfind("?"))
+    if last_end > int(len(excerpt) * 0.3):
+        excerpt = excerpt[:last_end + 1]
+    result = excerpt + " ▶ [continue]"
+    if hud_line:
+        result += "\n" + hud_line
+    return result
+
+
 @app.route("/api/game/chat", methods=["POST"])
 def api_game_chat():
     try:
@@ -1167,6 +1202,7 @@ def api_game_chat():
             return jsonify({"error": err}), 502
 
         content = d.get("message", {}).get("content", "")
+        content = _enforce_response_length(content)
         return jsonify({"response": content, "model": model})
 
     except Exception as e:
