@@ -4,13 +4,20 @@
 June 7, 2026 (End of Session)
 
 ## Current Version
-v0.12.44
+v0.12.45
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
 |------|----|----|------------|--------|
 | vernex-node1 | VRX-54b89a1684e21ae4 | 172.17.0.132 (LAN) / 76.244.40.49 (public) | prAB8hQJaXoWoT+WO7jbCKBT0TAJPMLjiE4QlOr2D0I= | v0.12.18 ✓ (daemon); v0.12.40 dashboard |
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
+
+## Recently Completed (2026-06-08)
+
+### v0.12.45 — Adaptive IQ matching + plot momentum + NPC argument cap (dashboard)
+✅ **ADAPTIVE IQ SYSTEM**: 4 tiers (Casual/Engaged/Strategic/Advanced) assessed silently from last 3-5 player messages; response complexity, NPC wit, and vocabulary all match player's detected tier; tier never exceeded; drops responded to immediately, rises gradual over 2-3 turns
+✅ **PLOT MOMENTUM RULES**: stagnation broken after 2 same-NPC turns via interruption/arrival/event; NPC who refused twice yields or exits; no repeated objections; short-response players get direct action; engaged players get subplots/dilemmas
+✅ **NPC ARGUMENT CAP**: hard 2-turn resistance max; Charisma gap thresholds reduce cap (10+ gap → 1 turn, 15+ → zero); dominated NPC becomes uncomfortable and compliant, not eloquent; no repeated objection text
 
 ## Recently Completed (2026-06-07)
 
