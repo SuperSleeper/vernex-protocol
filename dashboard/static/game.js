@@ -110,7 +110,23 @@ var NPC_NAME_EXCLUSIONS = {
   'Village':1,'Town':1,'City':1,'Forest':1,'Cave':1,'Castle':1,'Tavern':1,'Inn':1,'Market':1,'Temple':1,
   'Street':1,'Road':1,'Bridge':1,'Gate':1,'Tower':1,'Hall':1,'Shop':1,'Field':1,'River':1,'Mountain':1,
   'Lord':1,'Lady':1,'King':1,'Queen':1,'Guard':1,'Knight':1,'Merchant':1,'Wizard':1,'Warrior':1,
-  'Captain':1,'General':1,'Master':1,'Elder':1,'Chief':1,'Leader':1
+  'Captain':1,'General':1,'Master':1,'Elder':1,'Chief':1,'Leader':1,
+  // Additional false-positive suppressions
+  'Lead':1,'Voice':1,'Sound':1,'Figure':1,'Shadow':1,'Shape':1,'Farmer':1,'Soldier':1,
+  'Head':1,'Hand':1,'Face':1,'Eye':1,'Back':1,'Side':1,'Top':1,'High':1,'Low':1,
+  'Old':1,'New':1,'Last':1,'First':1,'Next':1,'Chest':1,'Foot':1,'Day':1,'Night':1,
+  'Way':1,'Time':1,'Man':1,'Woman':1,'Boy':1,'Girl':1,'Dark':1,'Light':1,'Red':1,'Black':1,
+  'White':1,'Gold':1,'Silver':1,'Iron':1,'Stone':1,'Wood':1,'Blood':1,'Fire':1,'Water':1,
+  'Air':1,'Earth':1,'Death':1,'Life':1,'War':1,'Peace':1,'Luck':1,'Fate':1,'Honor':1,
+  'Your':1,'With':1,'From':1,'Into':1,'Upon':1,'After':1,'Before':1,'Through':1,'Around':1
+};
+
+var NPC_RECRUIT_KEYWORDS = ['join me','come with me','join my party','join my crew','join my team','travel with me','fight with me'];
+var NPC_TALKDOWN_KEYWORDS = ['stand down','talk down','reason with','make peace','settle this'];
+var STAT_ABBREV = {
+  'Strength':'STR','Stamina':'STA','Charisma':'CHA','Magic':'MAG','Agility':'AGI','Luck':'LCK',
+  'Intelligence':'INT','Tech Skill':'TEC','Endurance':'END','Cunning':'CUN',
+  'Wit':'WIT','Clumsiness':'CLU','Charm':'CHR','Stubbornness':'STU'
 };
 
 var STARTING_ITEMS = {
@@ -732,6 +748,9 @@ function renderCharSheet() {
         + (npc.last_location ? '<span class="cs-npc-loc">' + escHtml(npc.last_location) + '</span>' : '')
         + '</div>'
         + '<div class="cs-npc-depth">' + depthBar + '</div>';
+      if (npc.stats_rolled && npc.stats && Object.keys(npc.stats).length) {
+        html += '<div class="cs-npc-stats">' + escHtml(formatNpcStats(npc.stats)) + '</div>';
+      }
       if (mem.length) {
         html += '<div class="cs-npc-mem">' + escHtml(mem.join(' · ')) + '</div>';
       }
@@ -1269,6 +1288,87 @@ async function equipStartingInventory() {
   } catch(e) {}
 }
 
+// ── NPC helpers ──────────────────────────────────────────────
+function formatNpcStats(stats) {
+  if (!stats) return '';
+  return Object.keys(stats).map(function(k) {
+    return (STAT_ABBREV[k] || k.slice(0,3).toUpperCase()) + ':' + stats[k];
+  }).join(' ');
+}
+
+function detectRecruitmentIntent(text) {
+  var lower = text.toLowerCase();
+  return NPC_RECRUIT_KEYWORDS.some(function(k) { return lower.indexOf(k) >= 0; });
+}
+
+function detectTalkdownIntent(text) {
+  var lower = text.toLowerCase();
+  return NPC_TALKDOWN_KEYWORDS.some(function(k) { return lower.indexOf(k) >= 0; });
+}
+
+function findNpcInText(text) {
+  var lower = text.toLowerCase();
+  // Prefer rivals for talkdown, allies excluded
+  return Object.values(_npcs).find(function(npc) {
+    return lower.indexOf(npc.name.toLowerCase()) >= 0;
+  }) || null;
+}
+
+async function attemptRecruitment(npc, speechText) {
+  if (!_currentSaveId) return;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/npc/recruit', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({npc_id: npc.id, speech_text: speechText})
+    });
+    var d = await r.json();
+    if (d.error) return;
+    var statStr = d.npc_stats ? '\n' + formatNpcStats(d.npc_stats) : '';
+    if (d.outcome === 'auto_join') {
+      appendSystemMsg('⭐ **' + escHtml(npc.name) + '** trusts you completely and joins without hesitation.' + statStr);
+    } else if (d.outcome === 'success') {
+      appendSystemMsg('✅ **' + escHtml(npc.name) + '** joins your party!' + statStr);
+    } else if (d.outcome === 'flip_success') {
+      appendSystemMsg('🎲 **' + escHtml(npc.name) + '** hesitates... then nods. They join your party!' + statStr);
+    } else if (d.outcome === 'flip_fail') {
+      appendSystemMsg('🎲 **' + escHtml(npc.name) + '** almost agrees... but shakes their head and walks away.');
+    } else {
+      appendSystemMsg('❌ **' + escHtml(npc.name) + '** declines. (Their Charisma ' + d.npc_charisma + ' > your score ' + d.player_score + '). Try again with higher Charisma or a better speech.');
+    }
+    if (d.npc) { _npcs[d.npc.id] = d.npc; renderCharSheet(); }
+  } catch(e) {}
+}
+
+async function attemptTalkDown(npc, speechText) {
+  if (!_currentSaveId) return;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/npc/talkdown', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({npc_id: npc.id, speech_text: speechText})
+    });
+    var d = await r.json();
+    if (d.error) return;
+    if (d.outcome === 'success' || d.outcome === 'flip_success') {
+      appendSystemMsg('🟡 **' + escHtml(npc.name) + '** stands down. They eye you warily but sheathe their blade.');
+    } else {
+      appendSystemMsg('⚠️ **' + escHtml(npc.name) + '** is unmoved. They grow more determined. (+10% combat stats)');
+    }
+    if (d.npc) { _npcs[d.npc.id] = d.npc; renderCharSheet(); }
+  } catch(e) {}
+}
+
+async function markNpcRival(npcId) {
+  if (!_currentSaveId) return;
+  try {
+    var r = await fetch('/api/game/saves/' + _currentSaveId + '/npc/rival', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({npc_id: npcId})
+    });
+    var d = await r.json();
+    if (d.npc) { _npcs[d.npc.id] = d.npc; renderCharSheet(); }
+  } catch(e) {}
+}
+
 // ── NPC system ───────────────────────────────────────────────
 function _npcByName(name) {
   var lower = name.toLowerCase();
@@ -1310,20 +1410,17 @@ async function updateNPCInteraction(npcId, eventType, interactionText, location)
 
 function extractNpcNamesFromText(text) {
   var names = [];
-  // Name + speech verb: "Seraphina said"
+  // Pattern 1: Name + speech verb: "Seraphina said"
   var pat1 = /\b([A-Z][a-z]{2,11})\s+(?:says?|said|replies?|replied|asks?|asked|whispers?|whispered|mutters?|muttered|shouts?|shouted|calls?|tells?|greets?|laughs?|sighs?|nods?|smiles?|frowns?)\b/g;
-  // Speech verb + Name: "said Seraphina"
+  // Pattern 2: Speech verb + Name: "said Seraphina"
   var pat2 = /\b(?:says?|said|replied?|replies?|asks?|asked|whispers?|mutters?|shouts?|called|told|greeted)\s+([A-Z][a-z]{2,11})\b/g;
-  // Encounter + Name: "meets Seraphina", "encounters Seraphina"
-  var pat3 = /\b(?:meets?|met|encounters?|encountered|sees?|saw|approaches?|approached|greets?|greeted|introduces?|introduced|named|calls?|known as)\s+([A-Z][a-z]{2,11})\b/g;
-  // "Name, a ..." or "Name —" (narrator introducing)
-  var pat4 = /\b([A-Z][a-z]{2,11}),?\s+(?:a |an |the |—|-\s)/g;
+  // Pattern 3: Encounter/introduction verb + Name: "meets Seraphina", "named Seraphina"
+  var pat3 = /\b(?:meets?|met|encounters?|encountered|sees?|saw|approaches?|approached|greets?|greeted|introduces?|introduced|named|known as|calls? (?:herself|himself|themselves))\s+([A-Z][a-z]{2,11})\b/g;
   var m;
   while ((m = pat1.exec(text)) !== null) names.push(m[1]);
   while ((m = pat2.exec(text)) !== null) names.push(m[1]);
   while ((m = pat3.exec(text)) !== null) names.push(m[1]);
-  while ((m = pat4.exec(text)) !== null) names.push(m[1]);
-  // Deduplicate and filter exclusions
+  // Deduplicate and filter exclusions; minimum 3 chars enforced by regex already
   var seen = {};
   return names.filter(function(n) {
     if (NPC_NAME_EXCLUSIONS[n] || seen[n]) return false;
@@ -1403,6 +1500,18 @@ async function sendTurn(e) {
     handleSkillTracking(resp);
     detectItemNarrativeLoss(resp);
     detectNarrativeNPCs(resp);
+    // Recruitment / talk-down checks triggered by player prompt keywords
+    if (detectRecruitmentIntent(prompt)) {
+      var recruitTarget = findNpcInText(prompt);
+      if (recruitTarget && recruitTarget.relationship !== 'ally') {
+        await attemptRecruitment(recruitTarget, prompt);
+      }
+    } else if (detectTalkdownIntent(prompt)) {
+      var talkdownTarget = findNpcInText(prompt);
+      if (talkdownTarget && talkdownTarget.relationship === 'rival') {
+        await attemptTalkDown(talkdownTarget, prompt);
+      }
+    }
   } catch(err) {
     _history.pop();
     appendMsg('error', 'Request failed: ' + err.message);

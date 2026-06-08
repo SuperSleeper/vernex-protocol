@@ -695,7 +695,17 @@ UNIVERSAL GAME RULES (follow strictly on every turn):
   "Your worn sword chips against the armor" / "The cloak tears as you squeeze through the gap"
 - If an item is clearly lost, stolen, traded, or destroyed: state it explicitly so the system can update inventory
 - If an item is badly damaged or broken: state it explicitly
-- If a repair NPC (blacksmith, mechanic, tailor, armorer) is available: offer to restore broken items to full condition\
+- If a repair NPC (blacksmith, mechanic, tailor, armorer) is available: offer to restore broken items to full condition
+- RECRUITMENT RULES:
+  When player uses recruitment keywords (join me, come with me, join my party, travel with me, fight with me):
+  Narrate the NPC's reaction naturally — the system resolves the check separately.
+  A befriended NPC (5+ interactions) always joins without hesitation.
+  On rejection, narrate the NPC's reason — failure makes future recruitment harder.
+- TALK-DOWN RULES:
+  When player uses talk-down keywords (stand down, talk down, reason with, make peace, settle this):
+  Narrate the rival's reaction naturally — the system resolves the check separately.
+  Rival NPCs add their Strength to enemy combat — mention this threat if relevant.
+- NPCs remember recruitment attempts — reference a prior failed attempt if the player tries again\
 """
 
 _PRE_CONTEXT_2 = {
@@ -892,6 +902,7 @@ details[open]>summary::before{transform:rotate(90deg)}
 .cs-npc-loc{font-size:.62rem;color:#3d5070;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70px}
 .cs-npc-depth{font-size:.64rem;color:#5a6a7e;letter-spacing:1px;margin-top:1px}
 .cs-npc-mem{font-size:.60rem;color:#3d5070;margin-top:1px;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cs-npc-stats{font-size:.60rem;color:#8892a4;margin-top:2px;font-family:'Courier New',monospace;letter-spacing:.03em}
 .msg.system{background:#1a1600;border:1px solid #3d2e00;align-self:stretch;font-size:.82rem;font-family:'Courier New',monospace;padding:8px 12px}
 .msg.system p{margin:.3em 0}
 .lvl-choices{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
@@ -1847,6 +1858,47 @@ def api_inventory_repair(save_id):
 
 # ── NPC helpers ────────────────────────────────────────────────────────────────
 
+_NPC_STAT_NAMES: dict = {
+    "fantasy": ["Strength", "Stamina", "Charisma", "Magic", "Agility", "Luck"],
+    "scifi":   ["Intelligence", "Tech Skill", "Agility", "Charisma", "Endurance", "Luck"],
+    "action":  ["Strength", "Stamina", "Charisma", "Cunning", "Agility", "Luck"],
+    "comedy":  ["Charisma", "Wit", "Luck", "Clumsiness", "Charm", "Stubbornness"],
+}
+
+
+def _roll_4d6_drop_lowest() -> int:
+    rolls = [random.randint(1, 6) for _ in range(4)]
+    return sum(sorted(rolls)[1:])
+
+
+def _roll_npc_stats(genre: str) -> dict:
+    names = _NPC_STAT_NAMES.get(genre, _NPC_STAT_NAMES["fantasy"])
+    return {n: _roll_4d6_drop_lowest() for n in names}
+
+
+def _eval_speech_quality(text: str) -> int:
+    words = len(text.split())
+    power = ["because", "together", "trust", "promise", "swear", "honor", "glory",
+             "destiny", "purpose", "believe", "strength", "journey", "fight", "stand"]
+    pw = sum(1 for w in power if w in text.lower())
+    if words >= 30 or pw >= 3: return 4
+    if words >= 20 or pw >= 2: return 3
+    if words >= 10 or pw >= 1: return 2
+    return 1
+
+
+def _player_charisma(s: dict) -> int:
+    genre = s.get("genre", "fantasy")
+    stats = s.get("stats", {})
+    cha_key = "Charm" if genre == "comedy" else "Charisma"
+    raw = stats.get(cha_key) or stats.get("Charisma") or 8
+    if isinstance(raw, dict):
+        return max(1, raw.get("base", 0) + raw.get("item_bonus", 0) +
+                   raw.get("skill_bonus", 0) + raw.get("level_bonus", 0) +
+                   raw.get("temp_penalty", 0))
+    return max(1, int(raw))
+
+
 def _make_npc(name: str, location: str = "") -> dict:
     return {
         "id": str(_uuid.uuid4())[:8],
@@ -1966,6 +2018,130 @@ def api_npcs_get(save_id):
     if s is None:
         return jsonify({"error": "not found"}), 404
     return jsonify({"npcs": s.get("npcs", {})})
+
+
+@app.route("/api/game/saves/<save_id>/npc/recruit", methods=["POST"])
+def api_npc_recruit(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    npc_id = body.get("npc_id")
+    speech_text = body.get("speech_text", "")
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    npcs = s.get("npcs", {})
+    npc = npcs.get(npc_id)
+    if npc is None:
+        return jsonify({"error": "npc not found"}), 404
+
+    genre = s.get("genre", "fantasy")
+    if not npc.get("stats_rolled"):
+        npc["stats"] = _roll_npc_stats(genre)
+        npc["stats_rolled"] = True
+
+    player_cha = _player_charisma(s)
+    sq_bonus = max(0, _eval_speech_quality(speech_text) - 1)
+    player_score = player_cha + sq_bonus
+    npc_cha = npc["stats"].get("Charisma") or npc["stats"].get("Charm") or 8
+    npc.setdefault("recruit_attempts", 0)
+    npc["recruit_attempts"] += 1
+    npc["last_recruit_attempt"] = _dt.utcnow().isoformat()
+
+    befriended = npc.get("interactions", 0) >= 5 or npc.get("relationship") in ("befriended",)
+    if befriended:
+        outcome = "auto_join"
+        npc["relationship"] = "ally"
+        npc["memory"] = ((npc.get("memory") or []) + ["joined party"])[-5:]
+    elif player_score > npc_cha:
+        outcome = "success"
+        npc["relationship"] = "ally"
+        npc["memory"] = ((npc.get("memory") or []) + ["joined party"])[-5:]
+    elif player_score == npc_cha:
+        if random.random() < 0.5:
+            outcome = "flip_success"
+            npc["relationship"] = "ally"
+            npc["memory"] = ((npc.get("memory") or []) + ["joined party after coin flip"])[-5:]
+        else:
+            outcome = "flip_fail"
+    else:
+        outcome = "fail"
+
+    s["npcs"] = npcs
+    _write_save_record(save_id, uid, s)
+    return jsonify({"outcome": outcome, "npc": npc, "npc_stats": npc["stats"],
+                    "player_score": player_score, "npc_charisma": int(npc_cha)})
+
+
+@app.route("/api/game/saves/<save_id>/npc/talkdown", methods=["POST"])
+def api_npc_talkdown(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    npc_id = body.get("npc_id")
+    speech_text = body.get("speech_text", "")
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    npcs = s.get("npcs", {})
+    npc = npcs.get(npc_id)
+    if npc is None:
+        return jsonify({"error": "npc not found"}), 404
+    if npc.get("relationship") != "rival":
+        return jsonify({"error": "npc is not a rival"}), 400
+
+    genre = s.get("genre", "fantasy")
+    if not npc.get("stats_rolled"):
+        npc["stats"] = _roll_npc_stats(genre)
+        npc["stats_rolled"] = True
+
+    player_cha = _player_charisma(s)
+    sq_bonus = max(0, _eval_speech_quality(speech_text) - 1)
+    player_score = player_cha + sq_bonus
+    npc_cha = npc["stats"].get("Charisma") or npc["stats"].get("Charm") or 8
+
+    if player_score > npc_cha:
+        outcome = "success"
+        npc["relationship"] = "neutral"
+        npc["memory"] = ((npc.get("memory") or []) + ["talked down by player"])[-5:]
+    elif player_score == npc_cha:
+        if random.random() < 0.5:
+            outcome = "flip_success"
+            npc["relationship"] = "neutral"
+            npc["memory"] = ((npc.get("memory") or []) + ["talked down (coin flip)"])[-5:]
+        else:
+            outcome = "flip_fail"
+            npc["combat_stat_bonus"] = 10
+    else:
+        outcome = "fail"
+        npc["combat_stat_bonus"] = 10
+
+    s["npcs"] = npcs
+    _write_save_record(save_id, uid, s)
+    return jsonify({"outcome": outcome, "npc": npc,
+                    "player_score": player_score, "npc_charisma": int(npc_cha)})
+
+
+@app.route("/api/game/saves/<save_id>/npc/rival", methods=["POST"])
+def api_npc_rival(save_id):
+    uid = _user_id(_get_current_user())
+    body = request.get_json(force=True) or {}
+    npc_id = body.get("npc_id")
+    s = _get_save_record(save_id, uid)
+    if s is None:
+        return jsonify({"error": "not found"}), 404
+    npcs = s.get("npcs", {})
+    npc = npcs.get(npc_id)
+    if npc is None:
+        return jsonify({"error": "npc not found"}), 404
+
+    npc["relationship"] = "rival"
+    genre = s.get("genre", "fantasy")
+    if not npc.get("stats_rolled"):
+        npc["stats"] = _roll_npc_stats(genre)
+        npc["stats_rolled"] = True
+
+    s["npcs"] = npcs
+    _write_save_record(save_id, uid, s)
+    return jsonify({"ok": True, "npc": npc, "npc_stats": npc["stats"]})
 
 
 @app.route("/api/game/saves/<save_id>/combat/start", methods=["POST"])
