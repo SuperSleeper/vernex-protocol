@@ -23,7 +23,7 @@ Key architectural innovations:
 
 ---
 
-## 2. Current Implementation — v0.12.17
+## 2. Current Implementation — v0.12.37
 
 ### 2.1 Hardware Configuration
 
@@ -32,7 +32,7 @@ Key architectural innovations:
 | vernex-node1 | RTX 3070 8GB / 64GB RAM / Pop!_OS 24.04 | VRX-54b89a1684e21ae4 | Bootstrap — scheduler, dashboard, auth relay, nginx |
 | vernex-node2 | HP Victus / RTX 4070 Max-Q / 60GB RAM / Pop!_OS 24.04 COSMIC | VRX-a5474b585793501c | Compute node |
 
-### 2.2 Daemon Capabilities (Go — v0.12.17)
+### 2.2 Daemon Capabilities (Go — v0.12.18)
 
 - P2P TCP/UDP listener on port 7700
 - HTTPS API on port 7701 — /status, /health, /submit, /consent, /queue, /peers, /register, /deregister, /stun, /install

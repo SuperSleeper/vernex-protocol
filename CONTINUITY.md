@@ -4,7 +4,7 @@
 June 7, 2026 (End of Session)
 
 ## Current Version
-v0.12.36
+v0.12.37
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -13,6 +13,22 @@ v0.12.36
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-07)
+
+### v0.12.37 — auto-equip starting inventory + item condition + state tracking (dashboard)
+✅ **STARTING_ITEMS table**: all 4 genres × all subtypes → starting equipment per class with slot + stat_effects
+✅ **Item state fields**: every item now carries `status` (equipped/bag/broken/lost/missing) and `condition` (0–100); `_generate_item()` initializes both; `migrateStats()` compat preserved
+✅ **conditionMultiplier()**: 0%=broken→0.0, <25%=critical→0.25, <50%=damaged→0.5, ≥50%→1.0; applied in `recalcItemBonuses()` so stat bonuses scale with item wear
+✅ **Multi-color stat bar condition**: `recalcItemBonuses()` applies `Math.floor(stat_effect * mult)` per item; degraded items give proportionally reduced bonuses
+✅ **renderCharSheet() equipped section**: wrapped in `.cs-equipped-slot-wrap`; condition icons (🔴/⚠) inline after item name; `[broken]` state for broken items; `[MISSING]` for missing items; condition bar (`.cond-bar-row`) below each item when condition < 100 and not broken; color shifts gold→orange→red as condition drops
+✅ **buildInventoryContext()**: equipped items now include condition notes (`[worn:72%]`, `[damaged:40%]`, `[critical:18%]`, `[BROKEN]`) so LLM has full state awareness
+✅ **Pre-Context 1 narrative rules**: LLM instructed to reference item condition naturally in narrative and state explicitly when items are lost/broken/repaired
+✅ **equipStartingInventory()**: async function called after first LLM response in `startGame()`; looks up STARTING_ITEMS by genre+subtype; calls quickSave if no save ID; POSTs to `/inventory/equip-starting`; applies returned equipped dict + recalculates stats
+✅ **updateItemStatus()**: async helper — POSTs to `/inventory/status`; on `lost` removes item from `_inventory.equipped` and `_inventory.bag`; recalcs + re-renders char sheet
+✅ **detectItemNarrativeLoss()**: sentence-level scan after every LLM response; checks item names against ITEM_LOSS_WORDS (drops/loses/stolen/taken/etc.) and ITEM_BREAK_WORDS (cracks/breaks/snaps/etc.); calls `updateItemStatus()` on match
+✅ **handleCombatResult()**: applies `d.item_conditions` updates from server to `_inventory.equipped`; shows "has broken!" message and "critically damaged (N%)" warnings inline; calls `recalcItemBonuses()` + `renderCharSheet()`
+✅ **4 new Flask routes**: `POST /inventory/equip-starting` (batch-equip starting items, condition=100); `POST /inventory/condition` (apply condition change to item); `POST /inventory/status` (update status, remove lost items); `POST /inventory/repair` (restore condition to 100)
+✅ **Combat condition degradation** (server-side `api_combat_attack()`): weapon -5/attack (-10 on fire_breath); body armor -3/damage taken (-10 on fire_breath/call_reinforcements); `_apply_item_condition()` helper clamps to 0 + sets status='broken'; returned as `item_conditions: [{slot, id, condition, status}]`
+✅ **Commit**: 304d8e8 — pushed to origin main
 
 ### v0.12.36 — three-layer context + compact HUD + multi-color stat bars (dashboard)
 ✅ **Pre-Context 1** (universal): 2-3 line response limit, compact HUD format `[Location > Sublocation] HP:X/Y LVL:N STAT:N`, stat reference requirement, skill tracking, level-up trigger, NPC depth rules — stored as `_PRE_CONTEXT_1` Python constant
@@ -923,4 +939,4 @@ Add as patent extension claim before March 24, 2027 non-provisional deadline.
 ---
 
 ## Continuity Note for Claude Chat (paste at start of new session)
-*Vernex Protocol — daemon v0.12.18 (both nodes), dashboard v0.12.29 (node1 only). Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard, distributed CA (Root → Intermediate → Compute Node, Shamir K-of-N), clock verification (4-step NTP guard). Dashboard (node1 only): multi-genre text adventure at /game (Fantasy/Sci-Fi/Action/ComedyDrama), D&D-style 4d6 stat rolling with subtype modifiers, per-user save isolation under ~/vernex/config/game_saves/<user_id>/, Google OAuth via vernex.net relay, GPU gauge (RTX 3070). Update scripts: node1 = vernex-bootstrap-setup.sh, node2 = vernex-node-setup.sh. Patent pending US App. 64/015,885, deadline March 24 2027.*
+*Vernex Protocol — daemon v0.12.18 (both nodes), dashboard v0.12.37 (node1 only). Two-node cluster (vernex-node1: 172.17.0.132 / 76.244.40.49, vernex-node2: 172.17.0.182). Full security stack: hybrid ed25519 + ML-DSA 44 post-quantum signing, TLS on 7701, rate limiting, trust request approval via dashboard, distributed CA (Root → Intermediate → Compute Node, Shamir K-of-N), clock verification (4-step NTP guard). Dashboard (node1 only): multi-genre text adventure at /game (Fantasy/Sci-Fi/Action/ComedyDrama), D&D-style 4d6 stat rolling with subtype modifiers, three-layer LLM context (universal rules + genre rules + custom), per-class starting inventory auto-equipped on game start, item condition + state tracking (0–100% condition, broken/lost/missing states), per-user save isolation under ~/vernex/config/game_saves/<user_id>/, Google OAuth via vernex.net relay, GPU gauge (RTX 3070). Update scripts: node1 = vernex-bootstrap-setup.sh, node2 = vernex-node-setup.sh. Patent pending US App. 64/015,885, deadline March 24 2027.*
