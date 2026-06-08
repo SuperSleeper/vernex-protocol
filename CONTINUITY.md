@@ -4,7 +4,7 @@
 June 7, 2026 (End of Session)
 
 ## Current Version
-v0.12.43
+v0.12.44
 
 ## Node Registry
 | Node | ID | IP | Public Key | Status |
@@ -13,6 +13,12 @@ v0.12.43
 | vernex-node2 | VRX-a5474b585793501c | 172.17.0.182 | /Lcqppk1jkHUVdgNNHaS15FDKurHO3jgPP3+oMfB83Y= | v0.12.18 ✓ (daemon) |
 
 ## Recently Completed (2026-06-07)
+
+### v0.12.44 — Persistent NPC context injection every turn + history window limit (dashboard)
+✅ **`_window_messages(messages, keep_turns=10)`**: trims conversation sent to Ollama — preserves leading system messages + game opening (first 2 user/assistant) + last 10 turns (20 messages) + invCtx tail; prevents context overflow on long sessions
+✅ **`_build_persistent_context(messages)`**: scans messages for most recent `### CURRENT CHARACTER STATE` system block; extracts level, health, effective Charisma, KNOWN CHARACTERS (friendly+ only), party; extracts current location from last assistant HUD line; returns a `=== PERSISTENT CONTEXT ===` block with `=== KNOWN NPCs — NEVER FORGET THESE ===` section
+✅ **`api_game_chat` updated**: applies windowing then injects persistent context as the LAST system message immediately before the user message — always within model's active context window regardless of history length
+✅ **NPC filter**: only NPCs with relationship friendly/befriended/ally/rival appear in persistent context; passive/unknown NPCs are omitted to reduce noise
 
 ### v0.12.43 — NPC compliance scales with Charisma gap + NPC dialogue length limit (dashboard)
 ✅ **NPC COMPLIANCE RULES added to `_PRE_CONTEXT_1`**: Charisma gap thresholds (5+/10+/15+) govern NPC resistance; NPC dialogue capped at 1-2 sentences; NPC actions 1 sentence max; 2-3 line limit applies to all content including NPC speech; no monologues regardless of situation

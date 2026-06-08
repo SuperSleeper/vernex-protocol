@@ -1148,6 +1148,146 @@ def api_gpu():
         return jsonify({"error": "unavailable"}), 503
 
 
+def _window_messages(messages: list, keep_turns: int = 10) -> list:
+    """Keep initial system messages + game opening (2) + last N turns + tail."""
+    if not messages:
+        return messages
+
+    # Collect leading system messages (pre-context blocks)
+    head_sys = []
+    i = 0
+    while i < len(messages) and messages[i].get("role") == "system":
+        head_sys.append(messages[i])
+        i += 1
+
+    rest = messages[i:]
+    # Small conversation: no trimming needed
+    if len(rest) <= keep_turns * 2 + 4:
+        return messages
+
+    # The tail is [invCtx_system?, last_user] — always keep
+    if len(rest) >= 2 and rest[-2].get("role") == "system":
+        tail = rest[-2:]
+        body = rest[:-2]
+    else:
+        tail = rest[-1:]
+        body = rest[:-1]
+
+    # Game opening = first 2 (user "Begin" + assistant opening)
+    opening = body[:2]
+    middle = body[2:]
+
+    # Keep last N turns (each turn = user + assistant = 2 messages)
+    max_mid = keep_turns * 2
+    if len(middle) > max_mid:
+        middle = middle[-max_mid:]
+
+    return head_sys + opening + middle + tail
+
+
+def _build_persistent_context(messages: list) -> str:
+    """Distil NPC/player state into a high-priority block injected just before user input."""
+    # Find the most recent system message with inventory context
+    inv_content = ""
+    for m in reversed(messages):
+        if m.get("role") == "system" and "CURRENT CHARACTER STATE" in m.get("content", ""):
+            inv_content = m["content"]
+            break
+
+    if not inv_content:
+        return ""
+
+    # Extract current location from last assistant HUD line: [Location > Sub] HP:...
+    location = ""
+    for m in reversed(messages):
+        if m.get("role") == "assistant":
+            for line in m["content"].splitlines():
+                s = line.strip()
+                if s.startswith("[") and "HP:" in s:
+                    match = re.match(r"\[([^\]]+)\]", s)
+                    if match:
+                        location = match.group(1)
+                    break
+            break
+
+    inv_lines = inv_content.splitlines()
+
+    # Extract scalar fields
+    level_line  = next((l.strip() for l in inv_lines if l.strip().startswith("Level:")), "")
+    health_line = next((l.strip() for l in inv_lines if l.strip().startswith("Health:")), "")
+    cha_line    = next((l.strip() for l in inv_lines if "EFFECTIVE CHARISMA:" in l), "")
+
+    # Extract NPC entries (friendly and above)
+    npc_entries: list[str] = []
+    in_npc = False
+    for line in inv_lines:
+        s = line.strip()
+        if s == "KNOWN CHARACTERS:":
+            in_npc = True
+            continue
+        if in_npc:
+            if s.startswith("- "):
+                npc_entries.append(s)
+            elif s.startswith("Memory:"):
+                npc_entries.append("  " + s)
+            elif s and not s.startswith("Memory:"):
+                in_npc = False
+
+    # Filter to friendly+ only (skip passive/unknown)
+    filtered_npcs: list[str] = []
+    keep = False
+    for entry in npc_entries:
+        if entry.startswith("- "):
+            keep = any(rel in entry for rel in ("friendly", "befriended", "ally", "rival"))
+            if keep:
+                filtered_npcs.append(entry)
+        elif keep:
+            filtered_npcs.append(entry)
+
+    # Extract party entries
+    party_entries: list[str] = []
+    in_party = False
+    for line in inv_lines:
+        s = line.strip()
+        if "PARTY (" in s:
+            in_party = True
+            party_entries.append(s)
+            continue
+        if in_party:
+            if s.startswith("- ") or "Group Power" in s:
+                party_entries.append(s)
+            elif s:
+                in_party = False
+
+    # Build block
+    parts = ["=== PERSISTENT CONTEXT (active every turn — do not ignore) ==="]
+    if location:
+        parts.append(f"CURRENT LOCATION: {location}")
+    if level_line:
+        parts.append(level_line)
+    if health_line:
+        parts.append(health_line)
+    if cha_line:
+        parts.append(cha_line)
+
+    parts.append("")
+    if filtered_npcs:
+        parts.append("=== KNOWN NPCs — NEVER FORGET THESE ===")
+        parts.extend(filtered_npcs)
+    else:
+        parts.append("=== KNOWN NPCs: none with meaningful relationship yet ===")
+
+    parts.append("")
+    if party_entries:
+        parts.append("ACTIVE PARTY:")
+        parts.extend(party_entries)
+    else:
+        parts.append("ACTIVE PARTY: none")
+
+    parts.append("=== END PERSISTENT CONTEXT ===")
+    return "\n".join(parts)
+
+
 def _enforce_response_length(content: str) -> str:
     """Truncate LLM response to ≤3 content lines + 1 HUD line. Preserves sentence boundaries."""
     if not content or not content.strip():
@@ -1189,6 +1329,12 @@ def api_game_chat():
         model = body.get("model", "mistral")
         if not messages:
             return jsonify({"error": "messages required"}), 400
+
+        # Trim to last 10 turns + game opening, then inject persistent NPC context
+        messages = _window_messages(messages, keep_turns=10)
+        ctx_block = _build_persistent_context(messages)
+        if ctx_block and messages and messages[-1].get("role") == "user":
+            messages = messages[:-1] + [{"role": "system", "content": ctx_block}] + [messages[-1]]
 
         last = messages[-1] if messages else {}
         print(f"[game/chat] model={model!r} turns={len(messages)} last_role={last.get('role','?')!r}")
